@@ -45,8 +45,10 @@ dependencies:
   file_picker: ^8.1.7
   flutter_image_compress: ^2.3.0
   path_provider: ^2.1.4
+  mime: ^2.0.0
   record: ^5.2.1
   just_audio: ^0.9.38
+  open_filex: ^4.7.0
 
 dependency_overrides:
   record_platform_interface: 1.2.0

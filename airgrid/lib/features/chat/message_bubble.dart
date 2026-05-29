@@ -10,6 +10,7 @@ import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 
 class MessageBubble extends ConsumerWidget {
@@ -665,84 +666,148 @@ class _FileMessageContent extends StatelessWidget {
       progress < 1 &&
       message.deliveryStatus == DeliveryStatus.pending;
 
-    return Container(
-      width: 220,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-      decoration: BoxDecoration(
-        color: isLocal
-            ? Colors.white.withAlpha(140)
-            : cs.surfaceContainerHighest.withAlpha(165),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            Icons.insert_drive_file_outlined,
-            color: textColor,
-            size: 28,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  fileName,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: textColor,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  sizeLabel,
-                  style: TextStyle(
-                    color: textColor.withAlpha(180),
-                    fontSize: 11,
-                  ),
-                ),
-                if (message.mediaMimeType != null) ...[
-                  const SizedBox(height: 2),
+    return GestureDetector(
+      onTap: () => _openFileAttachment(context),
+      child: Container(
+        width: 220,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: isLocal
+              ? Colors.white.withAlpha(140)
+              : cs.surfaceContainerHighest.withAlpha(165),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.insert_drive_file_outlined,
+              color: textColor,
+              size: 28,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
                   Text(
-                    message.mediaMimeType!,
-                    maxLines: 1,
+                    fileName,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: textColor.withAlpha(160),
-                      fontSize: 10,
-                    ),
-                  ),
-                ],
-                if (isSending) ...[
-                  const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    child: LinearProgressIndicator(
-                      value: progress,
-                      minHeight: 4,
-                      backgroundColor: textColor.withAlpha(50),
                       color: textColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Sending ${(progress * 100).round()}%',
+                    sizeLabel,
                     style: TextStyle(
-                      color: textColor.withAlpha(160),
-                      fontSize: 10,
-                      fontWeight: FontWeight.w500,
+                      color: textColor.withAlpha(180),
+                      fontSize: 11,
                     ),
                   ),
+                  if (message.mediaMimeType != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      message.mediaMimeType!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textColor.withAlpha(160),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                  if (isSending) ...[
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 4,
+                        backgroundColor: textColor.withAlpha(50),
+                        color: textColor,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Sending ${(progress * 100).round()}%',
+                      style: TextStyle(
+                        color: textColor.withAlpha(160),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ] else ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Tap to open',
+                      style: TextStyle(
+                        color: textColor.withAlpha(180),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openFileAttachment(BuildContext context) async {
+    final path = message.mediaTempPath;
+    if (path == null || path.isEmpty) {
+      _showFileSnackBar(context, 'File is unavailable on this device.');
+      return;
+    }
+
+    final file = File(path);
+    if (!file.existsSync()) {
+      _showFileSnackBar(context, 'File is no longer available.');
+      return;
+    }
+
+    try {
+      final mimeType = message.mediaMimeType;
+      final resolvedType =
+          mimeType != null &&
+              mimeType.isNotEmpty &&
+              mimeType != 'application/octet-stream'
+          ? mimeType
+          : null;
+      final result = await OpenFilex.open(path, type: resolvedType);
+      if (!context.mounted) return;
+      switch (result.type) {
+        case ResultType.done:
+          return;
+        case ResultType.noAppToOpen:
+          _showFileSnackBar(context, 'No app found to open this file.');
+          return;
+        case ResultType.fileNotFound:
+          _showFileSnackBar(context, 'File is no longer available.');
+          return;
+        default:
+          _showFileSnackBar(context, 'Could not open this file.');
+      }
+    } catch (_) {
+      if (!context.mounted) return;
+      _showFileSnackBar(context, 'Could not open this file.');
+    }
+  }
+
+  void _showFileSnackBar(BuildContext context, String messageText) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(messageText),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }

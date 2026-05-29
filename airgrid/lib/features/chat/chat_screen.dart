@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:airgrid/app/app_router.dart';
@@ -24,6 +23,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:mime/mime.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
@@ -412,7 +412,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       final payload = FileAttachmentPayload(
         transferId: const Uuid().v4(),
         fileName: fileName,
-        mimeType: 'application/octet-stream',
+        mimeType:
+            lookupMimeType(fileName, headerBytes: bytes) ??
+            'application/octet-stream',
         byteLength: bytes.length,
         dataBase64: base64Encode(bytes),
         localTempPath: file.path,
