@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Privacy Policy — AirGrid</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:24px;color:#111;background:#f7f7f8}
+    .wrap{max-width:900px;margin:0 auto;background:#fff;padding:28px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.06)}
+    h1{margin-top:0;font-size:1.6rem}
+    h2{margin-bottom:6px;font-size:1.05rem}
+    p,ul{line-height:1.5}
+    footer{font-size:.9rem;color:#555;margin-top:20px}
+    a{color:#0366d6}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Privacy Policy</h1>
+    <p>Last updated: May 28, 2026</p>
+
+    <p>AirGrid is an offline-first, peer-to-peer mesh chat app for Android. This
+    privacy policy explains what data AirGrid accesses and how that data is
+    handled. AirGrid is designed to keep messaging local to nearby devices and
+    does not require, transmit, or store messages on a central server.</p>
+
+    <h2>Summary</h2>
+    <ul>
+      <li>AirGrid does not collect or transmit your chat messages to servers.</li>
+      <li>Local identity and cryptographic keys are generated and stored on-device.</li>
+      <li>The app requires Bluetooth / Wi‑Fi and may ask for location permissions
+        as required by the Android Nearby Connections API.</li>
+    </ul>
+
+    <h2>What the app stores on your device</h2>
+    <ul>
+      <li><strong>Messages:</strong> Chat messages are stored locally using SQLite.
+        Messages remain on your device unless you or the app delete them.</li>
+      <li><strong>Local identity:</strong> A stable node ID (UUID) and display name
+        are stored in app preferences.</li>
+      <li><strong>Cryptographic keys:</strong> X25519 keypairs and related key
+        material are generated locally and stored in secure storage (FlutterSecureStorage).
+        Private keys never leave your device.</li>
+      <li><strong>Known contacts:</strong> Persisted locally to allow encrypted
+        private messages to be addressed to previously discovered peers.</li>
+    </ul>
+
+    <h2>Permissions</h2>
+    <p>To discover and connect with nearby devices AirGrid may request the
+    following Android permissions at runtime:</p>
+    <ul>
+      <li>`BLUETOOTH`, `BLUETOOTH_ADMIN`, and on newer Android versions: `BLUETOOTH_SCAN`, `BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT`</li>
+      <li>`NEARBY_WIFI_DEVICES` (Wi‑Fi Direct / Nearby Connections on newer Android)</li>
+      <li>`ACCESS_FINE_LOCATION` where required by Nearby Connections on some OS versions</li>
+    </ul>
+    <p>If you permanently deny a permission the app exposes a shortcut to the
+    Android app settings so you can review or re-enable permissions.</p>
+
+    <h2>Networking and third-party services</h2>
+    <p>AirGrid uses the Android Nearby Connections runtime (Google Play
+    Services) for peer discovery and transport. Google Play Services is a
+    third-party component; its behavior and any telemetry it performs are governed
+    by Google's policies. AirGrid itself does not upload chat contents or keys
+    to external servers.</p>
+
+    <h2>Use of encryption</h2>
+    <p>Private messaging uses X25519 key agreement and authenticated encryption
+    (ChaCha20-Poly1305) where peers have exchanged public keys. Key exchange
+    announcements are rebroadcast on the local mesh to enable encrypted
+    communication. Private keys are stored in device secure storage and are not
+    transmitted to other devices.</p>
+
+    <h2>Store-and-forward (spool)</h2>
+    <p>When delivering an encrypted private packet to an offline peer, AirGrid may
+    temporarily hold (spool) an encrypted packet locally for limited time so it
+    can be forwarded when the recipient is next seen. Spool entries are bounded
+    by size and time-to-live and are stored only on the device that accepted the
+    spool entry.</p>
+
+    <h2>Analytics and crash reporting</h2>
+    <p>The default project does not include analytics, usage tracking, or crash
+    reporting. If you add such tools, their behavior will be governed by the
+    libraries you include and their own privacy terms. Review any added
+    dependencies for data collection details.</p>
+
+    <h2>Data deletion and user controls</h2>
+    <p>You can remove local messages, known contacts, and reset local identity
+    within the app (see Settings). Uninstalling the app typically removes its
+    local data, but Android behavior may vary by device and OS version.</p>
+
+    <h2>Children</h2>
+    <p>AirGrid is not directed at children. If you are a parent or guardian and
+    believe your child has provided personal data to AirGrid, you can remove the
+    app or clear its local data from device settings.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>We may update this privacy policy from time to time. Changes will appear
+    on this page with an updated "Last updated" date.</p>
+
+    <h2>Contact</h2>
+    <p>If you have questions about this privacy policy please update the contact
+    information below or add your preferred email address.</p>
+    <p><em>Maintainer:</em> jayarous project team (replace with your contact)</p>
+
+    <footer>
+      <p>AirGrid — an offline peer-to-peer mesh chat for Android. This page is
+      intended for deployment as a standalone privacy policy (Netlify drag-and-drop).
+      </p>
+    </footer>
+  </main>
+</body>
+</html>
