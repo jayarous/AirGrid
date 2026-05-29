@@ -195,6 +195,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
   }
 
+  Future<void> _refreshHome() async {
+    await _refreshPermissionStatus();
+    if (!mounted) return;
+    await ref.read(chatControllerProvider.notifier).startMesh(forceRestart: true);
+  }
+
+  Future<void> _refreshPeersFromChip() async {
+    HapticFeedback.selectionClick();
+    await _refreshHome();
+  }
+
   @override
   Widget build(BuildContext context) {
     final identity = ref.watch(localIdentityStoreProvider);
@@ -232,12 +243,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async {
-          await _refreshPermissionStatus();
-          await ref
-              .read(chatControllerProvider.notifier)
-              .startMesh(forceRestart: true);
-        },
+        onRefresh: _refreshHome,
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
@@ -291,6 +297,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               onToggleMesh: state.meshStarted
                   ? ref.read(chatControllerProvider.notifier).stopMesh
                   : ref.read(chatControllerProvider.notifier).startMesh,
+              onRefreshPeers: _refreshPeersFromChip,
               onToggleAdvertising: _toggleHomeAdvertising,
               onToggleDiscovering: _toggleHomeDiscovering,
             ),
@@ -399,6 +406,7 @@ class _MeshOverviewCard extends StatelessWidget {
   final bool isBlocked;
   final String? lastEvent;
   final Future<void> Function() onToggleMesh;
+  final Future<void> Function() onRefreshPeers;
   final Future<void> Function() onToggleAdvertising;
   final Future<void> Function() onToggleDiscovering;
 
@@ -411,6 +419,7 @@ class _MeshOverviewCard extends StatelessWidget {
     required this.isBlocked,
     required this.lastEvent,
     required this.onToggleMesh,
+    required this.onRefreshPeers,
     required this.onToggleAdvertising,
     required this.onToggleDiscovering,
   });
@@ -511,6 +520,7 @@ class _MeshOverviewCard extends StatelessWidget {
                         label: '$peerCount peer${peerCount == 1 ? '' : 's'}',
                         active: peerCount > 0,
                         color: Colors.teal,
+                        onTap: !isStarting ? onRefreshPeers : null,
                       ),
                       const SizedBox(width: 7),
                       _MetricChip(

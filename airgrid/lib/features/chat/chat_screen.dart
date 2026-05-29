@@ -18,7 +18,9 @@ import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/chat/message_bubble.dart';
 import 'package:airgrid/features/mesh_status/mesh_status_panel.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -266,8 +268,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         compressed.length > AirGridConstants.kPrivatePhotoMaxBytes) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Photo is too large. Try a smaller image.'),
+        SnackBar(
+          content: Text(
+            'Photo is too large after compression. Maximum is '
+            '${_formatBytes(AirGridConstants.kPrivatePhotoMaxBytes)}.',
+          ),
           duration: Duration(seconds: 2),
           behavior: SnackBarBehavior.floating,
         ),
@@ -343,6 +348,226 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } finally {
       controller.endForegroundCriticalAction();
     }
+  }
+
+  Future<void> _pickAndSendFile() async {
+    final controller = ref.read(chatControllerProvider.notifier);
+    controller.beginForegroundCriticalAction();
+    try {
+      final chatState = ref.read(chatControllerProvider);
+      if (chatState.selectedConversation is! PrivateConversation) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('File sharing is available only in private chats'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      FocusScope.of(context).unfocus();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Attach a file',
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.single;
+      final fileName = file.name;
+      if (file.size > AirGridConstants.kPrivateFileMaxBytes) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'File is too large. Maximum is '
+              '${_formatBytes(AirGridConstants.kPrivateFileMaxBytes)}.',
+            ),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      Uint8List bytes;
+      if (file.bytes != null) {
+        bytes = file.bytes!;
+      } else if (file.path != null && file.path!.isNotEmpty) {
+        bytes = await File(file.path!).readAsBytes();
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Selected file is unavailable'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      final payload = FileAttachmentPayload(
+        transferId: const Uuid().v4(),
+        fileName: fileName,
+        mimeType: 'application/octet-stream',
+        byteLength: bytes.length,
+        dataBase64: base64Encode(bytes),
+        localTempPath: file.path,
+      );
+
+      if (!await controller.waitForMeshReady()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Mesh is still reconnecting. Please try again.'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      final selectedConversation = ref
+          .read(chatControllerProvider)
+          .selectedConversation;
+      if (selectedConversation is! PrivateConversation) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('File sharing is available only in private chats'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      if (!await controller.waitForPeerOnline(selectedConversation.peerNodeId)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Recipient is still coming online. Please try again.'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      await _sendFilePayload(payload, messageId: const Uuid().v4());
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('File picker failed: ${e.message ?? e.code}'),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      controller.endForegroundCriticalAction();
+    }
+  }
+
+  Future<void> _sendFilePayload(
+    FileAttachmentPayload payload, {
+    required String messageId,
+  }) async {
+    final chatState = ref.read(chatControllerProvider);
+    final conv = chatState.selectedConversation;
+    if (conv is! PrivateConversation) return;
+
+    final peer = chatState.peers.cast<MeshPeer?>().firstWhere(
+      (p) => p?.nodeId == conv.peerNodeId,
+      orElse: () => null,
+    );
+
+    PrivateSendResult result;
+    if (peer != null) {
+      result = await ref
+          .read(chatControllerProvider.notifier)
+          .sendPrivateFile(
+            peer,
+            payload,
+            messageId: messageId,
+            packetId: messageId,
+            onProgress: (progress) {
+              if (!mounted) return;
+              ref
+                  .read(chatControllerProvider.notifier)
+                  .updateOutgoingFileProgress(messageId, progress);
+            },
+          );
+
+      if (result == PrivateSendResult.needsPlaintextConfirmation) {
+        if (!mounted) return;
+        final confirmed = await _showPlaintextConfirmDialog(
+          context,
+          peer.displayName,
+        );
+        if (!mounted || !confirmed) return;
+        result = await ref
+            .read(chatControllerProvider.notifier)
+            .sendPrivateFile(
+              peer,
+              payload,
+              messageId: messageId,
+              packetId: messageId,
+              allowPlaintextFallback: true,
+              onProgress: (progress) {
+                if (!mounted) return;
+                ref
+                    .read(chatControllerProvider.notifier)
+                    .updateOutgoingFileProgress(messageId, progress);
+              },
+            );
+      }
+    } else {
+      final contact = chatState.knownContacts.cast<KnownContact?>().firstWhere(
+        (c) => c?.nodeId == conv.peerNodeId,
+        orElse: () => null,
+      );
+      if (contact == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Contact not reachable'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      result = await ref
+          .read(chatControllerProvider.notifier)
+          .sendPrivateFileToContact(
+            contact,
+            payload,
+            messageId: messageId,
+            packetId: messageId,
+            onProgress: (progress) {
+              if (!mounted) return;
+              ref
+                  .read(chatControllerProvider.notifier)
+                  .updateOutgoingFileProgress(messageId, progress);
+            },
+          );
+    }
+
+    if (!mounted) return;
+    final ok =
+        result == PrivateSendResult.sentEncrypted ||
+        result == PrivateSendResult.sentPlaintext;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(ok ? 'File sent' : 'Failed to send file'),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<void> _sendImagePayload(ImageAttachmentPayload payload) async {
@@ -602,8 +827,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       if (duration < AirGridConstants.kPrivateVoiceNoteMinDuration) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Voice note is too short'),
+          SnackBar(
+            content: Text(
+              'Voice note is too short. Minimum is '
+              '${_formatDuration(AirGridConstants.kPrivateVoiceNoteMinDuration)}.',
+            ),
             duration: Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
@@ -613,8 +841,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       if (duration > AirGridConstants.kPrivateVoiceNoteMaxDuration) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Voice note is too long'),
+          SnackBar(
+            content: Text(
+              'Voice note is too long. Maximum is '
+              '${_formatDuration(AirGridConstants.kPrivateVoiceNoteMaxDuration)}.',
+            ),
             duration: Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
@@ -641,8 +872,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           bytes.length > AirGridConstants.kPrivateVoiceNoteMaxBytes) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Voice note is too large'),
+          SnackBar(
+            content: Text(
+              'Voice note is too large. Maximum is '
+              '${_formatBytes(AirGridConstants.kPrivateVoiceNoteMaxBytes)}.',
+            ),
             duration: Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
@@ -1163,7 +1397,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               _InputBar(
                 controller: _inputController,
                 onSend: _send,
-                onPickImage: _pickAndSendImage,
+                onOpenAttachmentMenu: _showAttachmentMenu,
                 onToggleVoiceRecording: _handleVoiceControlTap,
                 onCancelVoiceRecording: _cancelVoiceRecording,
                 isRecordingVoice: _isRecordingVoice,
@@ -1177,9 +1411,111 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       ),
     );
   }
+
+  Future<void> _showAttachmentMenu() async {
+    if (_isRecordingVoice) return;
+
+    final choice = await showModalBottomSheet<_AttachmentChoice>(
+      context: context,
+      showDragHandle: true,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (context) {
+        final cs = Theme.of(context).colorScheme;
+        final media = MediaQuery.of(context);
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            0,
+            16,
+            20 + media.viewPadding.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Attach something',
+                style: TextStyle(
+                  color: cs.onSurface,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _AttachmentMenuTile(
+                    icon: Icons.mic_rounded,
+                    color: cs.error,
+                    onTap: () => Navigator.pop(context, _AttachmentChoice.voice),
+                  ),
+                  _AttachmentMenuTile(
+                    icon: Icons.photo_library_outlined,
+                    color: cs.primary,
+                    onTap: () => Navigator.pop(context, _AttachmentChoice.photo),
+                  ),
+                  _AttachmentMenuTile(
+                    icon: Icons.attach_file_rounded,
+                    color: cs.tertiary,
+                    onTap: () => Navigator.pop(context, _AttachmentChoice.file),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted || choice == null) return;
+
+    switch (choice) {
+      case _AttachmentChoice.voice:
+        await _handleVoiceControlTap();
+        break;
+      case _AttachmentChoice.photo:
+        await _pickAndSendImage();
+        break;
+      case _AttachmentChoice.file:
+        await _pickAndSendFile();
+        break;
+    }
+  }
 }
 
 // ── Sub-widgets ──────────────────────────────────────────────────────────────
+
+enum _AttachmentChoice { voice, photo, file }
+
+class _AttachmentMenuTile extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _AttachmentMenuTile({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkResponse(
+      onTap: onTap,
+      radius: 56,
+      child: Container(
+        width: 56,
+        height: 56,
+        decoration: BoxDecoration(
+          color: color.withAlpha(24),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: color, size: 28),
+      ),
+    );
+  }
+}
 
 class _PeerBadge extends StatelessWidget {
   final int count;
@@ -1538,7 +1874,7 @@ class _ConversationChipLabel extends StatelessWidget {
 class _InputBar extends StatelessWidget {
   final TextEditingController controller;
   final VoidCallback onSend;
-  final VoidCallback onPickImage;
+  final VoidCallback onOpenAttachmentMenu;
   final VoidCallback onToggleVoiceRecording;
   final VoidCallback onCancelVoiceRecording;
   final bool isRecordingVoice;
@@ -1549,7 +1885,7 @@ class _InputBar extends StatelessWidget {
   const _InputBar({
     required this.controller,
     required this.onSend,
-    required this.onPickImage,
+    required this.onOpenAttachmentMenu,
     required this.onToggleVoiceRecording,
     required this.onCancelVoiceRecording,
     required this.isRecordingVoice,
@@ -1619,52 +1955,32 @@ class _InputBar extends StatelessWidget {
             ),
             Row(
               children: [
-                Tooltip(
-                  message: !isRecordingVoice
-                      ? 'Record voice note'
-                      : isVoiceRecordingPaused
-                      ? 'Resume recording'
-                      : 'Pause recording',
-                  child: OutlinedButton(
-                    onPressed: onToggleVoiceRecording,
-                    style: OutlinedButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      foregroundColor: isRecordingVoice ? cs.error : cs.primary,
-                      side: BorderSide(
-                        color: isRecordingVoice
-                            ? cs.error.withAlpha(150)
-                            : cs.primary.withAlpha(120),
-                      ),
-                      backgroundColor: isRecordingVoice
-                          ? cs.errorContainer.withAlpha(90)
-                          : null,
-                      padding: const EdgeInsets.all(10),
-                      minimumSize: const Size(40, 40),
-                    ),
-                    child: Icon(
-                      !isRecordingVoice
-                          ? Icons.mic_none
-                          : isVoiceRecordingPaused
-                          ? Icons.play_arrow_rounded
-                          : Icons.pause_rounded,
-                      size: 18,
-                    ),
-                  ),
-                ),
                 if (isRecordingVoice)
-                  IconButton(
-                    onPressed: onCancelVoiceRecording,
-                    icon: const Icon(Icons.close_rounded),
-                    tooltip: 'Discard recording',
-                    visualDensity: VisualDensity.compact,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        onPressed: onCancelVoiceRecording,
+                        icon: const Icon(Icons.close_rounded),
+                        tooltip: 'Discard recording',
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      IconButton(
+                        onPressed: onToggleVoiceRecording,
+                        icon: Icon(
+                          isVoiceRecordingPaused
+                              ? Icons.play_arrow_rounded
+                              : Icons.pause_rounded,
+                        ),
+                        tooltip: isVoiceRecordingPaused
+                            ? 'Resume recording'
+                            : 'Pause recording',
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
                   )
                 else
                   const SizedBox(width: 2),
-                IconButton(
-                  onPressed: isRecordingVoice ? null : onPickImage,
-                  icon: const Icon(Icons.photo_library_outlined),
-                  tooltip: 'Send photo',
-                ),
                 Expanded(
                   child: Container(
                     decoration: BoxDecoration(
@@ -1692,14 +2008,19 @@ class _InputBar extends StatelessWidget {
                             maxLines: 4,
                             textInputAction: TextInputAction.send,
                             onSubmitted: (_) {
-                              if (!isRecordingVoice) {
+                              if (isRecordingVoice) {
+                                return;
+                              }
+                              if (controller.text.trim().isNotEmpty) {
                                 onSend();
+                              } else {
+                                onOpenAttachmentMenu();
                               }
                             },
                             decoration: InputDecoration(
                               hintText: isRecordingVoice
                                   ? isVoiceRecordingPaused
-                                      ? 'Recording paused… tap mic to continue'
+                                  ? 'Recording paused… tap play to continue'
                                       : 'Recording in progress…'
                                   : 'Type a message…',
                               border: InputBorder.none,
@@ -1707,7 +2028,9 @@ class _InputBar extends StatelessWidget {
                               enabledBorder: InputBorder.none,
                               errorBorder: InputBorder.none,
                               disabledBorder: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                              ),
                             ),
                           ),
                         ),
@@ -1722,7 +2045,7 @@ class _InputBar extends StatelessWidget {
                     final hasText =
                         !isRecordingVoice && value.text.trim().isNotEmpty;
                     final hasVoiceDraft = isRecordingVoice;
-                    final active = hasText || hasVoiceDraft;
+                    final active = hasText || hasVoiceDraft || !isRecordingVoice;
                     return AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
                       decoration: BoxDecoration(
@@ -1734,14 +2057,20 @@ class _InputBar extends StatelessWidget {
                             ? onSendVoiceRecording
                             : hasText
                             ? onSend
-                            : null,
+                            : onOpenAttachmentMenu,
                         icon: Icon(
-                          Icons.send_rounded,
+                          hasVoiceDraft || hasText
+                            ? Icons.send_rounded
+                            : Icons.attach_file_rounded,
                           color: active
                               ? cs.onPrimary
                               : cs.onSurfaceVariant.withAlpha(100),
                         ),
-                        tooltip: hasVoiceDraft ? 'Send voice note' : 'Send',
+                        tooltip: hasVoiceDraft
+                            ? 'Send voice note'
+                            : hasText
+                            ? 'Send'
+                            : 'Attach',
                       ),
                     );
                   },
@@ -1760,6 +2089,28 @@ String _formatVoiceDuration(Duration duration) {
   final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
   return '$minutes:$seconds';
 }
+
+  String _formatBytes(int byteLength) {
+    const kb = 1024;
+    const mb = kb * 1024;
+    if (byteLength >= mb) {
+      return '${(byteLength / mb).toStringAsFixed(1)} MB';
+    }
+    if (byteLength >= kb) {
+      return '${(byteLength / kb).toStringAsFixed(1)} KB';
+    }
+    return '$byteLength B';
+  }
+
+  String _formatDuration(Duration duration) {
+    if (duration.inHours > 0) {
+      return '${duration.inHours}h ${duration.inMinutes.remainder(60)}m';
+    }
+    if (duration.inMinutes > 0) {
+      return '${duration.inMinutes}m ${duration.inSeconds.remainder(60)}s';
+    }
+    return '${duration.inSeconds}s';
+  }
 
 class _ConnectingBanner extends StatelessWidget {
   const _ConnectingBanner();

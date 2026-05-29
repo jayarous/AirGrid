@@ -10,9 +10,9 @@ class AirGridConstants {
 
   /// Maximum serialised packet size in bytes.
   ///
-  /// This must be high enough to allow image envelopes to be encoded before
-  /// they are split into fragment packets by [PacketFragmenter].
-  static const int kMaxPacketBytes = 512 * 1024;
+  /// This must be high enough to allow large private file envelopes to be
+  /// encoded before they are split into fragment packets by [PacketFragmenter].
+  static const int kMaxPacketBytes = 8 * 1024 * 1024;
 
   /// How long a message ID stays in the dedup cache before eviction.
   static const Duration kCacheTtl = Duration(hours: 2);
@@ -41,7 +41,7 @@ class AirGridConstants {
   static const Duration kReassemblyTtl = Duration(seconds: 30);
 
   /// Maximum total decoded fragment bytes kept across reassembly buckets.
-  static const int kReassemblyMaxBytesInFlight = 2 * 1024 * 1024;
+  static const int kReassemblyMaxBytesInFlight = 16 * 1024 * 1024;
 
   /// Maximum compressed image payload bytes accepted for private photo sends.
   static const int kPrivatePhotoMaxBytes = 300 * 1024;
@@ -56,6 +56,12 @@ class AirGridConstants {
 
   /// Maximum in-flight voice-note envelope bytes before rejecting decode.
   static const int kPrivateVoiceNoteMaxWireBytes = 280 * 1024;
+
+  /// Maximum file attachment bytes accepted for private sends.
+  static const int kPrivateFileMaxBytes = 5 * 1024 * 1024;
+
+  /// Maximum in-flight file envelope bytes before rejecting decode.
+  static const int kPrivateFileMaxWireBytes = 7 * 1024 * 1024;
 
   /// Minimum duration for a valid voice note.
   static const Duration kPrivateVoiceNoteMinDuration = Duration(seconds: 1);

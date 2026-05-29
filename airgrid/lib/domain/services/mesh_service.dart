@@ -226,16 +226,21 @@ class AirGridMeshService {
   }
 
   bool _shouldPaceFragments(AirGridPacket packet) {
-    return packet.packetType == 'audio' || packet.packetType == 'image';
+    return packet.packetType == 'audio' ||
+        packet.packetType == 'image' ||
+        packet.packetType == 'file';
   }
 
   Future<void> _sendPacketFragments(
     AirGridPacket packet,
     List<String> targets,
+    {void Function(double progress)? onProgress}
   ) async {
     final paced = _shouldPaceFragments(packet);
     final maxAttempts = paced ? 6 : 3;
-    for (final outgoing in PacketFragmenter.fragment(packet)) {
+    final fragments = PacketFragmenter.fragment(packet);
+    for (var index = 0; index < fragments.length; index++) {
+      final outgoing = fragments[index];
       final encoded = TransportCodec.encode(outgoing);
       Object? lastError;
 
@@ -256,10 +261,13 @@ class AirGridMeshService {
         throw lastError;
       }
 
+      onProgress?.call((index + 1) / fragments.length);
+
       if (paced) {
         await Future<void>.delayed(const Duration(milliseconds: 6));
       }
     }
+    onProgress?.call(1.0);
   }
 
   // -- Public API -----------------------------------------------------------
@@ -1162,6 +1170,254 @@ class AirGridMeshService {
     }
   }
 
+  Future<PrivateSendResult> sendPrivateFile(
+    MeshPeer peer,
+    FileAttachmentPayload file, {
+    bool allowPlaintextFallback = false,
+    String? messageId,
+    String? packetId,
+    bool emitLocalMessage = true,
+    void Function(double progress)? onProgress,
+  }) async {
+    final recipientNodeId = peer.nodeId;
+    if (recipientNodeId == null) return PrivateSendResult.peerUnavailable;
+
+    if (_contactStore.isBlocked(recipientNodeId)) {
+      return PrivateSendResult.blockedContact;
+    }
+
+    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
+        !_contactStore.isTrusted(recipientNodeId)) {
+      return PrivateSendResult.notTrusted;
+    }
+
+    if (!_outboundLimiter.allow()) {
+      return PrivateSendResult.failed;
+    }
+
+    var wireContent = file.toWire();
+    var encrypted = false;
+    int? encryptionVersion;
+
+    if (_cryptoService.hasKey(recipientNodeId)) {
+      final cipher = await _cryptoService.encryptContent(
+        wireContent,
+        recipientNodeId,
+      );
+      if (cipher != null) {
+        wireContent = cipher;
+        encrypted = true;
+        encryptionVersion = 1;
+      }
+    }
+
+    if (!encrypted && !allowPlaintextFallback) {
+      return PrivateSendResult.needsPlaintextConfirmation;
+    }
+
+    final localNodeId = _identity.nodeId;
+    final packetMessageId = packetId ?? messageId ?? const Uuid().v4();
+    final packet = AirGridPacket(
+      messageId: packetMessageId,
+      senderNodeId: localNodeId,
+      senderName: _identity.displayName ?? 'Unknown',
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      content: wireContent,
+      seenByNodes: [localNodeId],
+      hopLimit: AirGridConstants.kHopLimit,
+      packetType: 'file',
+      senderPublicKey: encrypted ? _identity.publicKeyBase64 : null,
+      encryptionVersion: encryptionVersion,
+      conversationType: 'private',
+      recipientNodeId: recipientNodeId,
+    );
+
+    _messageCache.add(packet.messageId);
+    _rememberReceiptAlias(packet.messageId, messageId);
+
+    if (emitLocalMessage) {
+      _messageController.add(
+        AirGridMessage.fromPacket(
+          packet.copyWith(content: '[file]'),
+          localNodeId,
+          conversationType: 'private',
+          peerNodeId: recipientNodeId,
+          peerName: peer.displayName,
+          deliveryStatus: DeliveryStatus.pending,
+          messageKind: 'file',
+          mediaMimeType: file.mimeType,
+          mediaByteLength: file.byteLength,
+          mediaTransferId: file.transferId,
+          mediaTempPath: file.localTempPath,
+        ),
+      );
+    }
+
+    try {
+      final targets = encrypted
+          ? _transport.connectedEndpoints.toSet().toList()
+          : [peer.endpointId];
+      if (encrypted && !targets.contains(peer.endpointId)) {
+        targets.add(peer.endpointId);
+      }
+      await _sendPacketFragments(
+        packet,
+        targets,
+        onProgress: onProgress,
+      );
+      _statusController.add((
+        messageId: messageId ?? packet.messageId,
+        status: DeliveryStatus.sent,
+      ));
+      return encrypted
+          ? PrivateSendResult.sentEncrypted
+          : PrivateSendResult.sentPlaintext;
+    } catch (_) {
+      if (encrypted) {
+        final fallbackTargets = _transport.connectedEndpoints
+            .where((id) => id != peer.endpointId)
+            .toList();
+
+        if (fallbackTargets.isNotEmpty) {
+          try {
+            await _sendPacketFragments(
+              packet,
+              fallbackTargets,
+              onProgress: onProgress,
+            );
+            _statusController.add((
+              messageId: messageId ?? packet.messageId,
+              status: DeliveryStatus.sent,
+            ));
+            return PrivateSendResult.sentEncrypted;
+          } catch (_) {
+            // Fall through to spool for deferred relay when immediate fallback fails.
+          }
+        }
+
+        _spoolPacket(packet);
+        _statusController.add((
+          messageId: messageId ?? packet.messageId,
+          status: DeliveryStatus.sent,
+        ));
+        return PrivateSendResult.sentEncrypted;
+      }
+
+      _statusController.add((
+        messageId: messageId ?? packet.messageId,
+        status: DeliveryStatus.failed,
+      ));
+      return PrivateSendResult.failed;
+    }
+  }
+
+  Future<PrivateSendResult> sendPrivateFileToContact(
+    KnownContact contact,
+    FileAttachmentPayload file,
+    {
+      String? messageId,
+      String? packetId,
+      bool emitLocalMessage = true,
+      void Function(double progress)? onProgress,
+    }
+  ) async {
+    if (_contactStore.isBlocked(contact.nodeId)) {
+      return PrivateSendResult.blockedContact;
+    }
+    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
+        !_contactStore.isTrusted(contact.nodeId)) {
+      return PrivateSendResult.notTrusted;
+    }
+    if (!_outboundLimiter.allow()) {
+      return PrivateSendResult.failed;
+    }
+
+    if (!_cryptoService.hasKey(contact.nodeId)) {
+      _cryptoService.cacheKey(contact.nodeId, contact.publicKeyBase64);
+    }
+
+    final cipher = await _cryptoService.encryptContent(
+      file.toWire(),
+      contact.nodeId,
+    );
+    if (cipher == null) return PrivateSendResult.peerUnavailable;
+
+    final localNodeId = _identity.nodeId;
+    final packetMessageId = packetId ?? messageId ?? const Uuid().v4();
+    final packet = AirGridPacket(
+      messageId: packetMessageId,
+      senderNodeId: localNodeId,
+      senderName: _identity.displayName ?? 'Unknown',
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      content: cipher,
+      seenByNodes: [localNodeId],
+      hopLimit: AirGridConstants.kHopLimit,
+      packetType: 'file',
+      senderPublicKey: _identity.publicKeyBase64,
+      encryptionVersion: 1,
+      conversationType: 'private',
+      recipientNodeId: contact.nodeId,
+    );
+
+    _messageCache.add(packet.messageId);
+    _rememberReceiptAlias(packet.messageId, messageId);
+
+    if (emitLocalMessage) {
+      _messageController.add(
+        AirGridMessage.fromPacket(
+          packet.copyWith(content: '[file]'),
+          localNodeId,
+          conversationType: 'private',
+          peerNodeId: contact.nodeId,
+          peerName: contact.displayName,
+          deliveryStatus: DeliveryStatus.pending,
+          messageKind: 'file',
+          mediaMimeType: file.mimeType,
+          mediaByteLength: file.byteLength,
+          mediaTransferId: file.transferId,
+          mediaTempPath: file.localTempPath,
+        ),
+      );
+    }
+
+    final directEndpoint = _endpointToNodeId.entries
+        .where((e) => e.value == contact.nodeId)
+        .map((e) => e.key)
+        .firstOrNull;
+
+    final targets = directEndpoint != null
+        ? [directEndpoint]
+        : _transport.connectedEndpoints.toList();
+
+    if (targets.isEmpty) {
+      _spoolPacket(packet);
+      _statusController.add((
+        messageId: messageId ?? packet.messageId,
+        status: DeliveryStatus.sent,
+      ));
+      return PrivateSendResult.sentEncrypted;
+    }
+
+    try {
+      await _sendPacketFragments(
+        packet,
+        targets,
+        onProgress: onProgress,
+      );
+      _statusController.add((
+        messageId: messageId ?? packet.messageId,
+        status: DeliveryStatus.sent,
+      ));
+      return PrivateSendResult.sentEncrypted;
+    } catch (_) {
+      _statusController.add((
+        messageId: messageId ?? packet.messageId,
+        status: DeliveryStatus.failed,
+      ));
+      return PrivateSendResult.failed;
+    }
+  }
+
   Future<void> dispose() async {
     _spoolRetryTimer.cancel();
     await _eventSub.cancel();
@@ -1311,7 +1567,8 @@ class AirGridMeshService {
         packet.packetType != 'read_receipt' &&
       packet.packetType != 'location_update' &&
       packet.packetType != 'image' &&
-      packet.packetType != 'audio') {
+      packet.packetType != 'audio' &&
+      packet.packetType != 'file') {
       final contentValidation = MessageContentValidator.validateRemote(
         packet.content,
       );
@@ -1359,6 +1616,7 @@ class AirGridMeshService {
         if ((packet.packetType == 'chat' ||
           packet.packetType == 'image' ||
           packet.packetType == 'audio' ||
+          packet.packetType == 'file' ||
             packet.packetType == 'location_update') &&
         !_shouldAcceptFromNode(packet.senderNodeId)) {
       AirGridLogger.log(
@@ -1439,7 +1697,9 @@ class AirGridMeshService {
           packet.senderPublicKey!,
         );
         if (plaintext != null &&
-            (packet.packetType == 'image' || packet.packetType == 'audio')) {
+            (packet.packetType == 'image' ||
+                packet.packetType == 'audio' ||
+                packet.packetType == 'file')) {
           final emitted = packet.packetType == 'image'
               ? await _buildImageMessage(
                   packet,
@@ -1447,7 +1707,14 @@ class AirGridMeshService {
                   plaintext,
                   isPrivate: isPrivate,
                 )
-              : await _buildAudioMessage(
+              : packet.packetType == 'audio'
+              ? await _buildAudioMessage(
+                  packet,
+                  localNodeId,
+                  plaintext,
+                  isPrivate: isPrivate,
+                )
+              : await _buildFileMessage(
                   packet,
                   localNodeId,
                   plaintext,
@@ -1495,7 +1762,9 @@ class AirGridMeshService {
     }
 
     // -- Emit plaintext to UI -----------------------------------------
-    if (packet.packetType == 'image' || packet.packetType == 'audio') {
+    if (packet.packetType == 'image' ||
+        packet.packetType == 'audio' ||
+        packet.packetType == 'file') {
       final emitted = packet.packetType == 'image'
           ? await _buildImageMessage(
               packet,
@@ -1503,7 +1772,14 @@ class AirGridMeshService {
               packet.content,
               isPrivate: isPrivate,
             )
-          : await _buildAudioMessage(
+          : packet.packetType == 'audio'
+          ? await _buildAudioMessage(
+              packet,
+              localNodeId,
+              packet.content,
+              isPrivate: isPrivate,
+            )
+          : await _buildFileMessage(
               packet,
               localNodeId,
               packet.content,
@@ -1724,6 +2000,42 @@ class AirGridMeshService {
       mediaByteLength: payload.byteLength,
       mediaTransferId: payload.transferId,
       mediaDurationMs: payload.durationMs,
+      mediaTempPath: mediaPath,
+    );
+  }
+
+  Future<AirGridMessage?> _buildFileMessage(
+    AirGridPacket packet,
+    String localNodeId,
+    String wireContent, {
+    required bool isPrivate,
+  }) async {
+    final payload = FileAttachmentPayload.fromWire(wireContent);
+    if (payload == null) {
+      return null;
+    }
+
+    String? mediaPath;
+    try {
+      mediaPath = await _mediaCache.writeFileBytes(
+        payload.transferId,
+        payload.bytes,
+        fileName: payload.fileName,
+      );
+    } catch (_) {
+      mediaPath = null;
+    }
+
+    return AirGridMessage.fromPacket(
+      packet.copyWith(content: '[file]'),
+      localNodeId,
+      conversationType: packet.conversationType,
+      peerNodeId: isPrivate ? packet.senderNodeId : null,
+      peerName: isPrivate ? packet.senderName : null,
+      messageKind: 'file',
+      mediaMimeType: payload.mimeType,
+      mediaByteLength: payload.byteLength,
+      mediaTransferId: payload.transferId,
       mediaTempPath: mediaPath,
     );
   }

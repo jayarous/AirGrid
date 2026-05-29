@@ -136,3 +136,71 @@ class AudioAttachmentPayload {
     }
   }
 }
+
+/// Versioned envelope carried in packet content for private file messages.
+class FileAttachmentPayload {
+  static const int currentVersion = 1;
+
+  final int version;
+  final String transferId;
+  final String fileName;
+  final String mimeType;
+  final int byteLength;
+  final String dataBase64;
+  final String? localTempPath;
+
+  const FileAttachmentPayload({
+    this.version = currentVersion,
+    required this.transferId,
+    required this.fileName,
+    required this.mimeType,
+    required this.byteLength,
+    required this.dataBase64,
+    this.localTempPath,
+  });
+
+  Uint8List get bytes => base64Decode(dataBase64);
+
+  Map<String, dynamic> toJson() => {
+    'v': version,
+    'kind': 'file',
+    'transferId': transferId,
+    'fileName': fileName,
+    'mimeType': mimeType,
+    'byteLength': byteLength,
+    'data': dataBase64,
+  };
+
+  String toWire() => jsonEncode(toJson());
+
+  static FileAttachmentPayload? fromWire(String wire) {
+    try {
+      final json = jsonDecode(wire);
+      if (json is! Map<String, dynamic>) return null;
+      if (json['kind'] != 'file') return null;
+      final dataBase64 = json['data'] as String?;
+      final transferId = json['transferId'] as String?;
+      final fileName = json['fileName'] as String?;
+      final mimeType = json['mimeType'] as String?;
+      final byteLength = json['byteLength'] as int?;
+      if (dataBase64 == null ||
+          transferId == null ||
+          fileName == null ||
+          mimeType == null ||
+          byteLength == null) {
+        return null;
+      }
+
+      return FileAttachmentPayload(
+        version: json['v'] as int? ?? currentVersion,
+        transferId: transferId,
+        fileName: fileName,
+        mimeType: mimeType,
+        byteLength: byteLength,
+        dataBase64: dataBase64,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}

@@ -10,6 +10,7 @@ import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:path/path.dart' as p;
 
 class MessageBubble extends ConsumerWidget {
   final AirGridMessage message;
@@ -40,7 +41,9 @@ class MessageBubble extends ConsumerWidget {
     final cs = Theme.of(context).colorScheme;
     final isLocal = message.isLocal;
     final isMedia =
-        message.messageKind == 'image' || message.messageKind == 'audio';
+      message.messageKind == 'image' ||
+      message.messageKind == 'audio' ||
+      message.messageKind == 'file';
 
     final bubbleColor = isLocal
         ? cs.primaryContainer
@@ -104,8 +107,14 @@ class MessageBubble extends ConsumerWidget {
                         message: message,
                         textColor: textColor,
                       )
-                    else
+                    else if (message.messageKind == 'audio')
                       _AudioMessageContent(
+                        message: message,
+                        textColor: textColor,
+                        isLocal: isLocal,
+                      )
+                    else
+                      _FileMessageContent(
                         message: message,
                         textColor: textColor,
                         isLocal: isLocal,
@@ -630,6 +639,139 @@ class _AudioMessageContentState extends State<_AudioMessageContent> {
     final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
     final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
+  }
+}
+
+class _FileMessageContent extends StatelessWidget {
+  final AirGridMessage message;
+  final Color textColor;
+  final bool isLocal;
+
+  const _FileMessageContent({
+    required this.message,
+    required this.textColor,
+    required this.isLocal,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final fileName = _displayFileName();
+    final sizeLabel = _formatFileSize(message.mediaByteLength ?? 0);
+    final progress = message.mediaTransferProgress;
+    final isSending = isLocal &&
+      progress != null &&
+      progress > 0 &&
+      progress < 1 &&
+      message.deliveryStatus == DeliveryStatus.pending;
+
+    return Container(
+      width: 220,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: isLocal
+            ? Colors.white.withAlpha(140)
+            : cs.surfaceContainerHighest.withAlpha(165),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.insert_drive_file_outlined,
+            color: textColor,
+            size: 28,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  fileName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  sizeLabel,
+                  style: TextStyle(
+                    color: textColor.withAlpha(180),
+                    fontSize: 11,
+                  ),
+                ),
+                if (message.mediaMimeType != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    message.mediaMimeType!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: textColor.withAlpha(160),
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+                if (isSending) ...[
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 4,
+                      backgroundColor: textColor.withAlpha(50),
+                      color: textColor,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Sending ${(progress * 100).round()}%',
+                    style: TextStyle(
+                      color: textColor.withAlpha(160),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _displayFileName() {
+    final path = message.mediaTempPath;
+    if (path == null || path.isEmpty) {
+      return 'File';
+    }
+
+    final base = p.basename(path);
+    final transferId = message.mediaTransferId;
+    if (transferId != null && base.startsWith('${transferId}_')) {
+      return base.substring(transferId.length + 1);
+    }
+    return base;
+  }
+
+  String _formatFileSize(int byteLength) {
+    if (byteLength <= 0) return 'Unknown size';
+    const kb = 1024;
+    const mb = kb * 1024;
+    if (byteLength >= mb) {
+      return '${(byteLength / mb).toStringAsFixed(1)} MB';
+    }
+    if (byteLength >= kb) {
+      return '${(byteLength / kb).toStringAsFixed(1)} KB';
+    }
+    return '$byteLength B';
   }
 }
 

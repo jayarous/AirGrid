@@ -21,10 +21,14 @@ class EphemeralMediaCache {
     String transferId,
     Uint8List bytes, {
     required String extension,
+    String? fileName,
   }) async {
     final dir = await _ensureCacheDir();
     final ext = extension.startsWith('.') ? extension : '.$extension';
-    final filePath = p.join(dir.path, '$transferId$ext');
+    final safeFileName = fileName == null || fileName.isEmpty
+        ? ''
+        : '_${p.basename(fileName)}';
+    final filePath = p.join(dir.path, '$transferId$safeFileName$ext');
     final file = File(filePath);
     await file.writeAsBytes(bytes, flush: true);
     return filePath;
@@ -51,6 +55,20 @@ class EphemeralMediaCache {
       transferId,
       bytes,
       extension: extension,
+    );
+  }
+
+  Future<String> writeFileBytes(
+    String transferId,
+    Uint8List bytes, {
+    required String fileName,
+  }) {
+    final ext = p.extension(fileName).replaceFirst('.', '');
+    return writeMediaBytes(
+      transferId,
+      bytes,
+      extension: ext.isEmpty ? 'bin' : ext,
+      fileName: fileName,
     );
   }
 

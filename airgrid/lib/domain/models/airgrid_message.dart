@@ -39,7 +39,7 @@ class AirGridMessage {
   /// participate in the receipt system).
   final DeliveryStatus deliveryStatus;
 
-  /// Message kind: 'text' (default) or 'image'.
+  /// Message kind: 'text' (default), 'image', 'audio', or 'file'.
   final String messageKind;
 
   /// MIME type for image messages.
@@ -66,6 +66,9 @@ class AirGridMessage {
   /// This is intended for in-memory UI rendering only and is not persisted.
   final String? mediaPreviewBase64;
 
+  /// Optional upload progress for outgoing file attachments, from 0.0 to 1.0.
+  final double? mediaTransferProgress;
+
   const AirGridMessage({
     required this.id,
     required this.senderNodeId,
@@ -88,6 +91,7 @@ class AirGridMessage {
     this.mediaDurationMs,
     this.mediaTempPath,
     this.mediaPreviewBase64,
+    this.mediaTransferProgress,
   });
 
   factory AirGridMessage.fromPacket(
@@ -107,6 +111,7 @@ class AirGridMessage {
     int? mediaDurationMs,
     String? mediaTempPath,
     String? mediaPreviewBase64,
+    double? mediaTransferProgress,
   }) {
     return AirGridMessage(
       id: packet.messageId,
@@ -130,6 +135,7 @@ class AirGridMessage {
       mediaDurationMs: mediaDurationMs,
       mediaTempPath: mediaTempPath,
       mediaPreviewBase64: mediaPreviewBase64,
+      mediaTransferProgress: mediaTransferProgress,
     );
   }
 
@@ -138,6 +144,7 @@ class AirGridMessage {
     DeliveryStatus? deliveryStatus,
     String? mediaTempPath,
     String? mediaPreviewBase64,
+    double? mediaTransferProgress,
   }) {
     return AirGridMessage(
       id: id,
@@ -161,6 +168,8 @@ class AirGridMessage {
       mediaDurationMs: mediaDurationMs,
       mediaTempPath: mediaTempPath ?? this.mediaTempPath,
       mediaPreviewBase64: mediaPreviewBase64 ?? this.mediaPreviewBase64,
+      mediaTransferProgress:
+          mediaTransferProgress ?? this.mediaTransferProgress,
     );
   }
 

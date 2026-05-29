@@ -883,6 +883,73 @@ class ChatController extends Notifier<ChatState> {
     }
   }
 
+  Future<PrivateSendResult> sendPrivateFile(
+    MeshPeer peer,
+    FileAttachmentPayload file, {
+    bool allowPlaintextFallback = false,
+    String? messageId,
+    String? packetId,
+    bool emitLocalMessage = true,
+    void Function(double progress)? onProgress,
+  }) async {
+    try {
+      return await _mesh.sendPrivateFile(
+        peer,
+        file,
+        allowPlaintextFallback: allowPlaintextFallback,
+        messageId: messageId,
+        packetId: packetId,
+        emitLocalMessage: emitLocalMessage,
+        onProgress: onProgress,
+      );
+    } catch (_) {
+      return PrivateSendResult.failed;
+    }
+  }
+
+  Future<PrivateSendResult> sendPrivateFileToContact(
+    KnownContact contact,
+    FileAttachmentPayload file,
+    {
+      String? messageId,
+      String? packetId,
+      bool emitLocalMessage = true,
+      void Function(double progress)? onProgress,
+    }
+  ) async {
+    try {
+      return await _mesh.sendPrivateFileToContact(
+        contact,
+        file,
+        messageId: messageId,
+        packetId: packetId,
+        emitLocalMessage: emitLocalMessage,
+        onProgress: onProgress,
+      );
+    } catch (_) {
+      return PrivateSendResult.failed;
+    }
+  }
+
+  void updateOutgoingFileProgress(String messageId, double progress) {
+    final idx = state.messages.indexWhere((m) => m.id == messageId);
+    if (idx == -1) return;
+    final existing = state.messages[idx];
+    if (!existing.isLocal ||
+        existing.conversationType != 'private' ||
+        existing.messageKind != 'file') {
+      return;
+    }
+
+    final clamped = progress.clamp(0.0, 1.0);
+    final updated = existing.copyWith(
+      mediaTransferProgress: clamped,
+    );
+    final newMessages = List<AirGridMessage>.from(state.messages)
+      ..[idx] = updated;
+    state = state.copyWith(messages: newMessages);
+  }
+
   Future<PrivateSendResult> retryImageMessage(
     AirGridMessage message,
   ) async {
@@ -1333,7 +1400,11 @@ class ChatController extends Notifier<ChatState> {
     if (idx == -1) return;
     final existing = state.messages[idx];
     if (!existing.isLocal || existing.conversationType != 'private') return;
-    final updated = existing.copyWith(deliveryStatus: newStatus);
+    final updated = existing.copyWith(
+      deliveryStatus: newStatus,
+      mediaTransferProgress:
+          newStatus == DeliveryStatus.pending ? existing.mediaTransferProgress : null,
+    );
     final newMessages = List<AirGridMessage>.from(state.messages)
       ..[idx] = updated;
     state = state.copyWith(messages: newMessages);
