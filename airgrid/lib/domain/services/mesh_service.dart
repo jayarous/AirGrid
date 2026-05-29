@@ -168,6 +168,11 @@ class AirGridMeshService {
   /// Per-peer read receipt batch rate limiters.
   late final PerPeerRateLimiterMap _receiptBatchLimiters;
 
+  /// Periodically retries queued encrypted private packets.
+  late final Timer _spoolRetryTimer;
+
+  bool _isFlushingSpool = false;
+
   AirGridMeshService(
     this._transport,
     this._identity,
@@ -207,6 +212,10 @@ class AirGridMeshService {
       idleEviction: AirGridConstants.kRateLimiterIdleEviction,
       clock: clock,
     );
+
+    _spoolRetryTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      unawaited(_flushAllSpooled());
+    });
   }
 
   bool _shouldAcceptFromNode(String senderNodeId) {
@@ -214,6 +223,43 @@ class AirGridMeshService {
       return true;
     }
     return _contactStore.isTrusted(senderNodeId);
+  }
+
+  bool _shouldPaceFragments(AirGridPacket packet) {
+    return packet.packetType == 'audio' || packet.packetType == 'image';
+  }
+
+  Future<void> _sendPacketFragments(
+    AirGridPacket packet,
+    List<String> targets,
+  ) async {
+    final paced = _shouldPaceFragments(packet);
+    final maxAttempts = paced ? 6 : 3;
+    for (final outgoing in PacketFragmenter.fragment(packet)) {
+      final encoded = TransportCodec.encode(outgoing);
+      Object? lastError;
+
+      for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          await _transport.sendToEndpoints(targets, encoded);
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          if (attempt < maxAttempts) {
+            await Future<void>.delayed(Duration(milliseconds: 40 * attempt));
+          }
+        }
+      }
+
+      if (lastError != null) {
+        throw lastError;
+      }
+
+      if (paced) {
+        await Future<void>.delayed(const Duration(milliseconds: 6));
+      }
+    }
   }
 
   // -- Public API -----------------------------------------------------------
@@ -409,10 +455,14 @@ class AirGridMeshService {
     );
 
     try {
+      final targets = encrypted
+          ? _transport.connectedEndpoints.toSet().toList()
+          : [peer.endpointId];
+      if (encrypted && !targets.contains(peer.endpointId)) {
+        targets.add(peer.endpointId);
+      }
       for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints([
-          peer.endpointId,
-        ], TransportCodec.encode(outgoing));
+        await _transport.sendToEndpoints(targets, TransportCodec.encode(outgoing));
       }
 
       AirGridLogger.log(
@@ -612,12 +662,7 @@ class AirGridMeshService {
     }
 
     try {
-      for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints(
-          targets,
-          TransportCodec.encode(outgoing),
-        );
-      }
+      await _sendPacketFragments(packet, targets);
       AirGridLogger.log(
         LogCategory.routing,
         'Sent private ${packet.messageId} to contact ${contact.nodeId}'
@@ -724,11 +769,13 @@ class AirGridMeshService {
     }
 
     try {
-      for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints([
-          peer.endpointId,
-        ], TransportCodec.encode(outgoing));
+      final targets = encrypted
+          ? _transport.connectedEndpoints.toSet().toList()
+          : [peer.endpointId];
+      if (encrypted && !targets.contains(peer.endpointId)) {
+        targets.add(peer.endpointId);
       }
+      await _sendPacketFragments(packet, targets);
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -737,6 +784,32 @@ class AirGridMeshService {
           ? PrivateSendResult.sentEncrypted
           : PrivateSendResult.sentPlaintext;
     } catch (_) {
+      if (encrypted) {
+        final fallbackTargets = _transport.connectedEndpoints
+            .where((id) => id != peer.endpointId)
+            .toList();
+
+        if (fallbackTargets.isNotEmpty) {
+          try {
+            await _sendPacketFragments(packet, fallbackTargets);
+            _statusController.add((
+              messageId: messageId ?? packet.messageId,
+              status: DeliveryStatus.sent,
+            ));
+            return PrivateSendResult.sentEncrypted;
+          } catch (_) {
+            // Fall through to spool for deferred relay when immediate fallback fails.
+          }
+        }
+
+        _spoolPacket(packet);
+        _statusController.add((
+          messageId: messageId ?? packet.messageId,
+          status: DeliveryStatus.sent,
+        ));
+        return PrivateSendResult.sentEncrypted;
+      }
+
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.failed,
@@ -836,12 +909,7 @@ class AirGridMeshService {
     }
 
     try {
-      for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints(
-          targets,
-          TransportCodec.encode(outgoing),
-        );
-      }
+      await _sendPacketFragments(packet, targets);
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -941,11 +1009,13 @@ class AirGridMeshService {
     }
 
     try {
-      for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints([
-          peer.endpointId,
-        ], TransportCodec.encode(outgoing));
+      final targets = encrypted
+          ? _transport.connectedEndpoints.toSet().toList()
+          : [peer.endpointId];
+      if (encrypted && !targets.contains(peer.endpointId)) {
+        targets.add(peer.endpointId);
       }
+      await _sendPacketFragments(packet, targets);
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -954,6 +1024,32 @@ class AirGridMeshService {
           ? PrivateSendResult.sentEncrypted
           : PrivateSendResult.sentPlaintext;
     } catch (_) {
+      if (encrypted) {
+        final fallbackTargets = _transport.connectedEndpoints
+            .where((id) => id != peer.endpointId)
+            .toList();
+
+        if (fallbackTargets.isNotEmpty) {
+          try {
+            await _sendPacketFragments(packet, fallbackTargets);
+            _statusController.add((
+              messageId: messageId ?? packet.messageId,
+              status: DeliveryStatus.sent,
+            ));
+            return PrivateSendResult.sentEncrypted;
+          } catch (_) {
+            // Fall through to spool for deferred relay when immediate fallback fails.
+          }
+        }
+
+        _spoolPacket(packet);
+        _statusController.add((
+          messageId: messageId ?? packet.messageId,
+          status: DeliveryStatus.sent,
+        ));
+        return PrivateSendResult.sentEncrypted;
+      }
+
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.failed,
@@ -1051,12 +1147,7 @@ class AirGridMeshService {
     }
 
     try {
-      for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints(
-          targets,
-          TransportCodec.encode(outgoing),
-        );
-      }
+      await _sendPacketFragments(packet, targets);
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -1072,6 +1163,7 @@ class AirGridMeshService {
   }
 
   Future<void> dispose() async {
+    _spoolRetryTimer.cancel();
     await _eventSub.cancel();
     await _messageController.close();
     await _peerController.close();
@@ -1104,7 +1196,7 @@ class AirGridMeshService {
           _endpointToNodeId[endpointId] = nodeId;
           // If messages were queued while this contact was offline, flush them
           // immediately when a direct route appears, even before key_announce.
-          _flushSpool(nodeId, endpointId);
+          unawaited(_flushSpool(nodeId, preferredEndpointId: endpointId));
         }
         _peerController.add(peers);
         AirGridLogger.log(
@@ -1760,7 +1852,7 @@ class AirGridMeshService {
       encryptionReady: true,
     );
     _peerController.add(peers);
-    _flushSpool(nodeId, endpointId);
+    unawaited(_flushSpool(nodeId, preferredEndpointId: endpointId));
 
     // Update the known contact's direct endpoint now that identity is confirmed.
     final contact = _contactStore.contacts
@@ -1894,32 +1986,114 @@ class AirGridMeshService {
       'Spooled ${packet.messageId} for $rid '
       '(${_spool[rid]!.length} queued)',
     );
+
+    // If we already have a direct route right now, retry immediately.
+    final endpointId = _endpointToNodeId.entries
+        .where((e) => e.value == rid)
+        .map((e) => e.key)
+        .firstOrNull;
+    if (endpointId != null) {
+      unawaited(_flushSpool(rid, preferredEndpointId: endpointId));
+    }
   }
 
   /// Delivers all spooled packets for [recipientNodeId] to [endpointId]
   /// and removes them from the spool.
   ///
   /// Called from [_markDirectPeerReady] when a direct peer is fully identified.
-  void _flushSpool(String recipientNodeId, String endpointId) {
-    final entries = _spool.remove(recipientNodeId);
+  Future<void> _flushSpool(
+    String recipientNodeId, {
+    String? preferredEndpointId,
+  }) async {
+    final entries = _spool[recipientNodeId];
     if (entries == null || entries.isEmpty) return;
+
+    final connected = _transport.connectedEndpoints.toList();
+    final mappedEndpoints = _endpointToNodeId.entries
+        .where((e) => e.value == recipientNodeId)
+        .map((e) => e.key)
+        .toList();
+    final targets = <String>[];
+
+    if (preferredEndpointId != null && connected.contains(preferredEndpointId)) {
+      targets.add(preferredEndpointId);
+    }
+    for (final id in mappedEndpoints) {
+      if (connected.contains(id) && !targets.contains(id)) {
+        targets.add(id);
+      }
+    }
+    for (final id in connected) {
+      if (!targets.contains(id)) {
+        targets.add(id);
+      }
+    }
+
+    if (targets.isEmpty) {
+      return;
+    }
 
     final ttl = const Duration(seconds: AirGridConstants.kSpoolTtlSeconds);
     final valid = entries
         .where((e) => !e.isExpired(ttl, clock: _spoolClock))
         .toList();
-    if (valid.isEmpty) return;
+    if (valid.isEmpty) {
+      _spool.remove(recipientNodeId);
+      return;
+    }
+
+    final remaining = <_SpoolEntry>[];
 
     for (final entry in valid) {
-      for (final outgoing in PacketFragmenter.fragment(entry.packet)) {
-        _transport.sendToEndpoints([
-          endpointId,
-        ], TransportCodec.encode(outgoing));
+      var delivered = false;
+      String? deliveredVia;
+
+      for (final endpointId in targets) {
+        try {
+          await _sendPacketFragments(entry.packet, [endpointId]);
+          delivered = true;
+          deliveredVia = endpointId;
+          break;
+        } catch (_) {
+          // Try the next candidate endpoint.
+        }
       }
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Flushed spooled ${entry.packet.messageId} to $recipientNodeId',
-      );
+
+      if (delivered) {
+        AirGridLogger.log(
+          LogCategory.routing,
+          'Flushed spooled ${entry.packet.messageId} to $recipientNodeId '
+          'via $deliveredVia',
+        );
+      } else {
+        remaining.add(entry);
+        AirGridLogger.log(
+          LogCategory.routing,
+          'Flush failed for spooled ${entry.packet.messageId} to $recipientNodeId; keeping queued',
+        );
+      }
+    }
+
+    if (remaining.isEmpty) {
+      _spool.remove(recipientNodeId);
+    } else {
+      _spool[recipientNodeId] = remaining;
+    }
+  }
+
+  Future<void> _flushAllSpooled() async {
+    if (_isFlushingSpool || _spool.isEmpty) {
+      return;
+    }
+
+    _isFlushingSpool = true;
+    try {
+      final recipients = _spool.keys.toList();
+      for (final recipientNodeId in recipients) {
+        await _flushSpool(recipientNodeId);
+      }
+    } finally {
+      _isFlushingSpool = false;
     }
   }
 

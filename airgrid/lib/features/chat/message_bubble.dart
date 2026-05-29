@@ -9,6 +9,7 @@ import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:just_audio/just_audio.dart';
 
 class MessageBubble extends ConsumerWidget {
   final AirGridMessage message;
@@ -38,6 +39,8 @@ class MessageBubble extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final cs = Theme.of(context).colorScheme;
     final isLocal = message.isLocal;
+    final isMedia =
+        message.messageKind == 'image' || message.messageKind == 'audio';
 
     final bubbleColor = isLocal
         ? cs.primaryContainer
@@ -92,59 +95,107 @@ class MessageBubble extends ConsumerWidget {
                     ),
                   ),
                 ),
-              // Message content and timestamp packed beautifully
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: message.messageKind == 'image'
-                        ? _ImageMessageContent(message: message, textColor: textColor)
-                        : Text(
-                            message.content,
-                            style: TextStyle(
-                              color: textColor,
-                              fontSize: 15,
-                              height: 1.25,
+              if (isMedia)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (message.messageKind == 'image')
+                      _ImageMessageContent(
+                        message: message,
+                        textColor: textColor,
+                      )
+                    else
+                      _AudioMessageContent(
+                        message: message,
+                        textColor: textColor,
+                        isLocal: isLocal,
+                      ),
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (message.isEncrypted &&
+                              message.conversationType == 'private')
+                            Padding(
+                              padding: const EdgeInsets.only(right: 3),
+                              child: Icon(
+                                Icons.lock,
+                                size: 11,
+                                color: textColor.withAlpha(140),
+                              ),
                             ),
-                          ),
-                  ),
-                  const SizedBox(width: 8),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (message.isEncrypted &&
-                            message.conversationType == 'private')
-                          Padding(
-                            padding: const EdgeInsets.only(right: 3),
-                            child: Icon(
-                              Icons.lock,
-                              size: 11,
+                          Text(
+                            timeStr,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w500,
                               color: textColor.withAlpha(140),
                             ),
                           ),
-                        Text(
-                          timeStr,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w500,
-                            color: textColor.withAlpha(140),
-                          ),
-                        ),
-                        if (message.isLocal &&
-                            message.conversationType == 'private')
-                          Padding(
-                            padding: const EdgeInsets.only(left: 3),
-                            child: _statusIcon(context, message.deliveryStatus),
-                          ),
-                      ],
+                          if (message.isLocal &&
+                              message.conversationType == 'private')
+                            Padding(
+                              padding: const EdgeInsets.only(left: 3),
+                              child: _statusIcon(context, message.deliveryStatus),
+                            ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                )
+              else
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        message.content,
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 15,
+                          height: 1.25,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (message.isEncrypted &&
+                              message.conversationType == 'private')
+                            Padding(
+                              padding: const EdgeInsets.only(right: 3),
+                              child: Icon(
+                                Icons.lock,
+                                size: 11,
+                                color: textColor.withAlpha(140),
+                              ),
+                            ),
+                          Text(
+                            timeStr,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w500,
+                              color: textColor.withAlpha(140),
+                            ),
+                          ),
+                          if (message.isLocal &&
+                              message.conversationType == 'private')
+                            Padding(
+                              padding: const EdgeInsets.only(left: 3),
+                              child: _statusIcon(context, message.deliveryStatus),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               if (message.isLocal &&
                   message.conversationType == 'private' &&
                   message.messageKind == 'image' &&
@@ -369,6 +420,216 @@ class _ImageMessageContent extends StatelessWidget {
       file: File(path!),
       heroTag: 'chat-image-${message.id}',
     );
+  }
+}
+
+class _AudioMessageContent extends StatefulWidget {
+  final AirGridMessage message;
+  final Color textColor;
+  final bool isLocal;
+
+  const _AudioMessageContent({
+    required this.message,
+    required this.textColor,
+    required this.isLocal,
+  });
+
+  @override
+  State<_AudioMessageContent> createState() => _AudioMessageContentState();
+}
+
+class _AudioMessageContentState extends State<_AudioMessageContent> {
+  final AudioPlayer _player = AudioPlayer();
+  String? _loadedPath;
+  bool _loading = false;
+  bool _loadFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureLoaded();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AudioMessageContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.message.mediaTempPath != oldWidget.message.mediaTempPath) {
+      _ensureLoaded();
+    }
+  }
+
+  Future<void> _ensureLoaded() async {
+    final path = widget.message.mediaTempPath;
+    if (path == null || path.isEmpty || !File(path).existsSync()) {
+      if (!mounted) return;
+      setState(() {
+        _loadedPath = null;
+        _loading = false;
+        _loadFailed = true;
+      });
+      return;
+    }
+
+    if (_loadedPath == path && !_loadFailed) {
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
+
+    try {
+      await _player.setFilePath(path);
+      if (!mounted) return;
+      setState(() {
+        _loadedPath = path;
+        _loading = false;
+        _loadFailed = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadedPath = null;
+        _loading = false;
+        _loadFailed = true;
+      });
+    }
+  }
+
+  Future<void> _togglePlayback() async {
+    if (_loading || _loadFailed || _loadedPath == null) return;
+    final state = _player.playerState;
+    if (state.playing) {
+      await _player.pause();
+      return;
+    }
+    if (state.processingState == ProcessingState.completed) {
+      await _player.seek(Duration.zero);
+    }
+    await _player.play();
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    if (_loadFailed) {
+      return Container(
+        width: 190,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withAlpha(20),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          'Voice note unavailable',
+          style: TextStyle(color: widget.textColor, fontSize: 12),
+        ),
+      );
+    }
+
+    return Container(
+      width: 190,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: widget.isLocal
+            ? Colors.white.withAlpha(140)
+            : cs.surfaceContainerHighest.withAlpha(165),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: StreamBuilder<PlayerState>(
+        stream: _player.playerStateStream,
+        initialData: _player.playerState,
+        builder: (context, stateSnapshot) {
+          final playerState = stateSnapshot.data ?? _player.playerState;
+          final isPlaying = playerState.playing;
+
+          return StreamBuilder<Duration>(
+            stream: _player.positionStream,
+            initialData: Duration.zero,
+            builder: (context, positionSnapshot) {
+              final position = positionSnapshot.data ?? Duration.zero;
+              final duration =
+                  _player.duration ??
+                  Duration(milliseconds: widget.message.mediaDurationMs ?? 0);
+              final safeDuration = duration > Duration.zero
+                  ? duration
+                  : const Duration(seconds: 1);
+              final progress =
+                  (position.inMilliseconds / safeDuration.inMilliseconds)
+                      .clamp(0.0, 1.0);
+
+              return Row(
+                children: [
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _loading ? null : _togglePlayback,
+                    icon: Icon(
+                      _loading
+                          ? Icons.hourglass_top_rounded
+                          : isPlaying
+                          ? Icons.pause_circle_filled_rounded
+                          : Icons.play_circle_fill_rounded,
+                      size: 28,
+                      color: widget.textColor,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Voice note',
+                          style: TextStyle(
+                            color: widget.textColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 4,
+                            backgroundColor: widget.textColor.withAlpha(50),
+                            color: widget.textColor,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${_formatAudioDuration(position)} / ${_formatAudioDuration(duration)}',
+                          style: TextStyle(
+                            color: widget.textColor.withAlpha(180),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  String _formatAudioDuration(Duration duration) {
+    final totalSeconds = duration.inSeconds;
+    final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 }
 

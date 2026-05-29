@@ -22,7 +22,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -38,9 +40,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   final _scrollController = ScrollController();
   final _imagePicker = ImagePicker();
   final _mediaCache = EphemeralMediaCache();
+  final _audioRecorder = AudioRecorder();
   bool _showStatus = false;
   bool _dismissPermissionBanner = false;
   MeshPermissionsSnapshot? _permissionsSnapshot;
+  bool _isRecordingVoice = false;
+  bool _isVoiceRecordingPaused = false;
+  final Stopwatch _voiceStopwatch = Stopwatch();
+  Duration _voiceRecordingElapsed = Duration.zero;
+  Timer? _voiceTicker;
 
   @override
   void initState() {
@@ -59,6 +67,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     WidgetsBinding.instance.removeObserver(this);
     _inputController.dispose();
     _scrollController.dispose();
+    _voiceTicker?.cancel();
+    unawaited(_audioRecorder.dispose());
     super.dispose();
   }
 
@@ -395,6 +405,405 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(ok ? 'Photo sent' : 'Failed to send photo'),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _handleVoiceControlTap() async {
+    if (!_isRecordingVoice) {
+      await _startVoiceRecording();
+      return;
+    }
+
+    if (_isVoiceRecordingPaused) {
+      await _resumeVoiceRecording();
+      return;
+    }
+
+    await _pauseVoiceRecording();
+  }
+
+  Future<void> _startVoiceRecording() async {
+    final chatState = ref.read(chatControllerProvider);
+    if (chatState.selectedConversation is! PrivateConversation) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Voice notes are available only in private chats'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final micPermission = await Permission.microphone.request();
+    if (!micPermission.isGranted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Microphone permission denied'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final hasRecordPermission = await _audioRecorder.hasPermission();
+    if (!hasRecordPermission && !await _audioRecorder.hasPermission()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Microphone permission denied'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    final filePath =
+        '${tempDir.path}\\airgrid_voice_${const Uuid().v4()}.m4a';
+
+    try {
+      await _audioRecorder.start(
+        const RecordConfig(
+          bitRate: 24000,
+          sampleRate: 16000,
+        ),
+        path: filePath,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to start recording'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    _voiceTicker?.cancel();
+    _voiceStopwatch
+      ..reset()
+      ..start();
+    if (!mounted) return;
+    setState(() {
+      _isRecordingVoice = true;
+      _isVoiceRecordingPaused = false;
+      _voiceRecordingElapsed = Duration.zero;
+    });
+    _voiceTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !_isRecordingVoice) return;
+      setState(() {
+        _voiceRecordingElapsed = _voiceStopwatch.elapsed;
+      });
+    });
+  }
+
+  Future<void> _pauseVoiceRecording() async {
+    if (!_isRecordingVoice || _isVoiceRecordingPaused) return;
+    try {
+      await _audioRecorder.pause();
+      _voiceStopwatch.stop();
+      if (!mounted) return;
+      setState(() {
+        _isVoiceRecordingPaused = true;
+        _voiceRecordingElapsed = _voiceStopwatch.elapsed;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to pause recording'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _resumeVoiceRecording() async {
+    if (!_isRecordingVoice || !_isVoiceRecordingPaused) return;
+    try {
+      await _audioRecorder.resume();
+      _voiceStopwatch.start();
+      if (!mounted) return;
+      setState(() {
+        _isVoiceRecordingPaused = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to resume recording'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _stopAndSendVoiceNote() async {
+    if (!_isRecordingVoice) return;
+
+    _voiceTicker?.cancel();
+    _voiceTicker = null;
+    _voiceStopwatch.stop();
+    final duration = _voiceStopwatch.elapsed;
+    _voiceStopwatch.reset();
+    setState(() {
+      _isRecordingVoice = false;
+      _isVoiceRecordingPaused = false;
+      _voiceRecordingElapsed = Duration.zero;
+    });
+
+    final controller = ref.read(chatControllerProvider.notifier);
+    controller.beginForegroundCriticalAction();
+    try {
+      String? recordedPath;
+      try {
+        recordedPath = await _audioRecorder.stop();
+      } catch (_) {
+        recordedPath = null;
+      }
+
+      if (recordedPath == null || recordedPath.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Recording canceled'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      final file = File(recordedPath);
+      if (!file.existsSync()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Recorded audio is unavailable'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      if (duration < AirGridConstants.kPrivateVoiceNoteMinDuration) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Voice note is too short'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      if (duration > AirGridConstants.kPrivateVoiceNoteMaxDuration) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Voice note is too long'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      Uint8List bytes;
+      try {
+        bytes = await file.readAsBytes();
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to read recorded audio'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      if (bytes.isEmpty ||
+          bytes.length > AirGridConstants.kPrivateVoiceNoteMaxBytes) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Voice note is too large'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      final payload = AudioAttachmentPayload(
+        transferId: const Uuid().v4(),
+        mimeType: 'audio/m4a',
+        byteLength: bytes.length,
+        durationMs: duration.inMilliseconds,
+        dataBase64: base64Encode(bytes),
+        localTempPath: recordedPath,
+      );
+
+      if (!await controller.waitForMeshReady()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Mesh is still reconnecting. Please try again.'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      final selectedConversation = ref
+          .read(chatControllerProvider)
+          .selectedConversation;
+      if (selectedConversation is! PrivateConversation) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Voice notes are available only in private chats'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      if (!await controller.waitForPeerOnline(selectedConversation.peerNodeId)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Recipient is still coming online. Please try again.'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      await _sendAudioPayload(payload);
+    } finally {
+      controller.endForegroundCriticalAction();
+    }
+  }
+
+  Future<void> _cancelVoiceRecording() async {
+    if (!_isRecordingVoice) return;
+
+    _voiceTicker?.cancel();
+    _voiceTicker = null;
+    _voiceStopwatch
+      ..stop()
+      ..reset();
+
+    String? recordedPath;
+    try {
+      recordedPath = await _audioRecorder.stop();
+    } catch (_) {
+      recordedPath = null;
+    }
+
+    if (recordedPath != null && recordedPath.isNotEmpty) {
+      try {
+        final file = File(recordedPath);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isRecordingVoice = false;
+      _isVoiceRecordingPaused = false;
+      _voiceRecordingElapsed = Duration.zero;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Voice recording discarded'),
+        duration: Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _sendAudioPayload(AudioAttachmentPayload payload) async {
+    final chatState = ref.read(chatControllerProvider);
+    final conv = chatState.selectedConversation;
+    if (conv is! PrivateConversation) return;
+
+    final peer = chatState.peers.cast<MeshPeer?>().firstWhere(
+      (p) => p?.nodeId == conv.peerNodeId,
+      orElse: () => null,
+    );
+
+    PrivateSendResult result;
+    if (peer != null) {
+      result = await ref
+          .read(chatControllerProvider.notifier)
+          .sendPrivateAudio(peer, payload);
+
+      if (result == PrivateSendResult.needsPlaintextConfirmation) {
+        if (!mounted) return;
+        final confirmed = await _showPlaintextConfirmDialog(
+          context,
+          peer.displayName,
+        );
+        if (!mounted || !confirmed) return;
+        result = await ref
+            .read(chatControllerProvider.notifier)
+            .sendPrivateAudio(
+              peer,
+              payload,
+              allowPlaintextFallback: true,
+            );
+      }
+    } else {
+      final contact = chatState.knownContacts.cast<KnownContact?>().firstWhere(
+        (c) => c?.nodeId == conv.peerNodeId,
+        orElse: () => null,
+      );
+      if (contact == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Contact not reachable'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      result = await ref
+          .read(chatControllerProvider.notifier)
+          .sendPrivateAudioToContact(contact, payload);
+    }
+
+    if (!mounted) return;
+    final ok =
+        result == PrivateSendResult.sentEncrypted ||
+        result == PrivateSendResult.sentPlaintext;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(ok ? 'Voice note sent' : 'Failed to send voice note'),
         duration: const Duration(seconds: 2),
         behavior: SnackBarBehavior.floating,
       ),
@@ -755,6 +1164,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 controller: _inputController,
                 onSend: _send,
                 onPickImage: _pickAndSendImage,
+                onToggleVoiceRecording: _handleVoiceControlTap,
+                onCancelVoiceRecording: _cancelVoiceRecording,
+                isRecordingVoice: _isRecordingVoice,
+                isVoiceRecordingPaused: _isVoiceRecordingPaused,
+                onSendVoiceRecording: _stopAndSendVoiceNote,
+                voiceRecordingElapsed: _voiceRecordingElapsed,
               ),
             ],
           );
@@ -1124,11 +1539,23 @@ class _InputBar extends StatelessWidget {
   final TextEditingController controller;
   final VoidCallback onSend;
   final VoidCallback onPickImage;
+  final VoidCallback onToggleVoiceRecording;
+  final VoidCallback onCancelVoiceRecording;
+  final bool isRecordingVoice;
+  final bool isVoiceRecordingPaused;
+  final VoidCallback onSendVoiceRecording;
+  final Duration voiceRecordingElapsed;
 
   const _InputBar({
     required this.controller,
     required this.onSend,
     required this.onPickImage,
+    required this.onToggleVoiceRecording,
+    required this.onCancelVoiceRecording,
+    required this.isRecordingVoice,
+    required this.isVoiceRecordingPaused,
+    required this.onSendVoiceRecording,
+    required this.voiceRecordingElapsed,
   });
 
   @override
@@ -1140,73 +1567,186 @@ class _InputBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: SafeArea(
         top: false,
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              onPressed: onPickImage,
-              icon: const Icon(Icons.photo_library_outlined),
-              tooltip: 'Send photo',
-            ),
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHigh,
-                  borderRadius: BorderRadius.circular(28),
-                ),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.chat_bubble_outline_rounded,
-                      size: 20,
-                      color: cs.onSurfaceVariant.withAlpha(150),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: controller,
-                        minLines: 1,
-                        maxLines: 4,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => onSend(),
-                        decoration: const InputDecoration(
-                          hintText: 'Type a message…',
-                          border: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          errorBorder: InputBorder.none,
-                          disabledBorder: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(vertical: 12),
-                        ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              child: !isRecordingVoice
+                  ? const SizedBox.shrink()
+                  : Container(
+                      key: const ValueKey('recording-chip'),
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cs.errorContainer,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.fiber_manual_record_rounded,
+                            color: cs.error,
+                            size: 14,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${isVoiceRecordingPaused ? "Paused" : "Recording"} ${_formatVoiceDuration(voiceRecordingElapsed)}',
+                              style: TextStyle(
+                                color: cs.onErrorContainer,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            isVoiceRecordingPaused
+                                ? 'Tap mic to continue'
+                                : 'Tap mic to pause',
+                            style: TextStyle(
+                              color: cs.onErrorContainer.withAlpha(200),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
-              ),
             ),
-            const SizedBox(width: 8),
-            ValueListenableBuilder<TextEditingValue>(
-              valueListenable: controller,
-              builder: (context, value, _) {
-                final hasText = value.text.trim().isNotEmpty;
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  decoration: BoxDecoration(
-                    color: hasText ? cs.primary : cs.surfaceContainerHigh,
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    onPressed: hasText ? onSend : null,
-                    icon: Icon(
-                      Icons.send_rounded,
-                      color: hasText
-                          ? cs.onPrimary
-                          : cs.onSurfaceVariant.withAlpha(100),
+            Row(
+              children: [
+                Tooltip(
+                  message: !isRecordingVoice
+                      ? 'Record voice note'
+                      : isVoiceRecordingPaused
+                      ? 'Resume recording'
+                      : 'Pause recording',
+                  child: OutlinedButton(
+                    onPressed: onToggleVoiceRecording,
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      foregroundColor: isRecordingVoice ? cs.error : cs.primary,
+                      side: BorderSide(
+                        color: isRecordingVoice
+                            ? cs.error.withAlpha(150)
+                            : cs.primary.withAlpha(120),
+                      ),
+                      backgroundColor: isRecordingVoice
+                          ? cs.errorContainer.withAlpha(90)
+                          : null,
+                      padding: const EdgeInsets.all(10),
+                      minimumSize: const Size(40, 40),
                     ),
-                    tooltip: 'Send',
+                    child: Icon(
+                      !isRecordingVoice
+                          ? Icons.mic_none
+                          : isVoiceRecordingPaused
+                          ? Icons.play_arrow_rounded
+                          : Icons.pause_rounded,
+                      size: 18,
+                    ),
                   ),
-                );
-              },
+                ),
+                if (isRecordingVoice)
+                  IconButton(
+                    onPressed: onCancelVoiceRecording,
+                    icon: const Icon(Icons.close_rounded),
+                    tooltip: 'Discard recording',
+                    visualDensity: VisualDensity.compact,
+                  )
+                else
+                  const SizedBox(width: 2),
+                IconButton(
+                  onPressed: isRecordingVoice ? null : onPickImage,
+                  icon: const Icon(Icons.photo_library_outlined),
+                  tooltip: 'Send photo',
+                ),
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(28),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        Icon(
+                          isRecordingVoice
+                              ? Icons.mic_rounded
+                              : Icons.chat_bubble_outline_rounded,
+                          size: 20,
+                          color: isRecordingVoice
+                              ? cs.error
+                              : cs.onSurfaceVariant.withAlpha(150),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            readOnly: isRecordingVoice,
+                            minLines: 1,
+                            maxLines: 4,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) {
+                              if (!isRecordingVoice) {
+                                onSend();
+                              }
+                            },
+                            decoration: InputDecoration(
+                              hintText: isRecordingVoice
+                                  ? isVoiceRecordingPaused
+                                      ? 'Recording paused… tap mic to continue'
+                                      : 'Recording in progress…'
+                                  : 'Type a message…',
+                              border: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              errorBorder: InputBorder.none,
+                              disabledBorder: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: controller,
+                  builder: (context, value, _) {
+                    final hasText =
+                        !isRecordingVoice && value.text.trim().isNotEmpty;
+                    final hasVoiceDraft = isRecordingVoice;
+                    final active = hasText || hasVoiceDraft;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      decoration: BoxDecoration(
+                        color: active ? cs.primary : cs.surfaceContainerHigh,
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        onPressed: hasVoiceDraft
+                            ? onSendVoiceRecording
+                            : hasText
+                            ? onSend
+                            : null,
+                        icon: Icon(
+                          Icons.send_rounded,
+                          color: active
+                              ? cs.onPrimary
+                              : cs.onSurfaceVariant.withAlpha(100),
+                        ),
+                        tooltip: hasVoiceDraft ? 'Send voice note' : 'Send',
+                      ),
+                    );
+                  },
+                ),
+              ],
             ),
           ],
         ),
@@ -1215,46 +1755,51 @@ class _InputBar extends StatelessWidget {
   }
 }
 
+String _formatVoiceDuration(Duration duration) {
+  final minutes = duration.inMinutes.toString().padLeft(2, '0');
+  final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
+  return '$minutes:$seconds';
+}
+
 class _ConnectingBanner extends StatelessWidget {
   const _ConnectingBanner();
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      color: cs.surface,
-      child: Column(
-        children: [
-          LinearProgressIndicator(
-            backgroundColor: Colors.amber.shade100,
-            color: Colors.amber.shade600,
-            minHeight: 2.5,
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
-            color: Colors.amber.withAlpha(20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.sync_rounded,
-                  size: 14,
-                  color: Colors.amber.shade800,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  'Connecting to mesh…',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.amber.shade900,
-                  ),
-                ),
-              ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: cs.tertiaryContainer.withAlpha(130),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: cs.tertiary.withAlpha(100)),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(cs.tertiary),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Reconnecting to mesh. You can keep chatting.',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onTertiaryContainer,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

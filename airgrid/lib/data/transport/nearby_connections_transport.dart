@@ -123,15 +123,34 @@ class NearbyConnectionsTransport implements TransportService {
     Iterable<String> endpointIds,
     Uint8List bytes,
   ) async {
+    var attempted = 0;
+    var succeeded = 0;
+
     for (final id in endpointIds) {
+      attempted++;
+      if (!_connectedEndpoints.contains(id)) {
+        AirGridLogger.log(
+          LogCategory.routing,
+          'sendBytesPayload skipped for $id: endpoint not connected',
+        );
+        continue;
+      }
+
       try {
         await Nearby().sendBytesPayload(id, bytes);
+        succeeded++;
       } catch (e) {
         AirGridLogger.log(
           LogCategory.routing,
-          'sendBytesPayload failed to $id: $e',
+          'send payload failed to $id: $e',
         );
       }
+    }
+
+    if (attempted == 0 || succeeded == 0) {
+      throw StateError(
+        'sendToEndpoints failed: attempted=$attempted succeeded=$succeeded',
+      );
     }
   }
 

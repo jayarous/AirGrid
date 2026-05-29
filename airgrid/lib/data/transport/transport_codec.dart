@@ -18,6 +18,7 @@ const _kPacketTypeToInt = <String, int>{
   'read_receipt': 4,
   'fragment': 5,
   'image': 6,
+  'audio': 7,
 };
 
 /// Compact integer -> packet type string for binary decoding.
@@ -29,6 +30,7 @@ const _kIntToPacketType = [
   'read_receipt',
   'fragment',
   'image',
+  'audio',
 ];
 
 // -- Flags byte bit positions --------------------------------------------------
