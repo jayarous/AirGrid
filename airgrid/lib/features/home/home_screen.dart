@@ -1,14 +1,20 @@
+import 'dart:async';
+
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
+import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
+import 'package:airgrid/features/profile/peer_profile_sheet.dart';
+import 'package:airgrid/features/settings/profile_avatar_catalog.dart';
+import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -120,6 +126,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     Navigator.of(context).pushNamed(AppRouter.chat);
   }
 
+  void _openWalkie() {
+    unawaited(Navigator.of(context).pushNamed(AppRouter.walkie));
+  }
+
   void _openFirstUnreadPrivateChat(ChatState state) {
     String? peerNodeId;
     for (final entry in state.unreadPrivateCounts.entries) {
@@ -202,7 +212,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _refreshPeersFromChip() async {
-    HapticFeedback.selectionClick();
+    unawaited(HapticFeedback.selectionClick());
     await _refreshHome();
   }
 
@@ -212,6 +222,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final state = ref.watch(chatControllerProvider);
     final cs = Theme.of(context).colorScheme;
     final displayName = identity.displayName?.trim();
+    final profileStatus = identity.profileStatus?.trim();
+    final profileIcon = ProfileAvatarCatalog.iconFor(identity.profileIconId);
+    final isOnline = state.meshStarted;
     final missingPermissions =
         _permissionsSnapshot?.hasMissingCriticalPermissions ?? false;
     final recentMessages = state.messages.take(3).toList();
@@ -221,15 +234,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
 
     return Scaffold(
+      backgroundColor: cs.surface,
       appBar: AppBar(
+        elevation: 0,
+        scrolledUnderElevation: 2,
+        backgroundColor: cs.surface.withAlpha(240),
         title: Image.asset(
           'assets/images/airgrid_horizontal.png',
-          height: 34,
+          height: 32,
           fit: BoxFit.contain,
           alignment: Alignment.centerLeft,
         ),
         titleSpacing: 16,
         actions: [
+          const PublicWalkieStatusIcon(),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
@@ -245,24 +263,46 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       body: RefreshIndicator(
         onRefresh: _refreshHome,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
           children: [
-            Text(
+            Row(
+              children: [
+                ProfileAvatarBadge(
+                  icon: profileIcon,
+                  isOnline: isOnline,
+                  radius: 26,
+                  backgroundColor: cs.primaryContainer,
+                  iconColor: cs.onPrimaryContainer,
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
               displayName == null || displayName.isEmpty
-                  ? 'Ready to connect'
-                  : 'Ready, $displayName',
+                  ? 'Hello'
+                  : 'Hello, $displayName',
               style: Theme.of(
                 context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800, letterSpacing: -0.5),
             ),
-            const SizedBox(height: 4),
-            Text(
-              _statusLineFor(state),
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+            if (profileStatus != null && profileStatus.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                profileStatus,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 24),
             if (missingPermissions) ...[
               _ActionBanner(
                 icon: Icons.security,
@@ -293,6 +333,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               isAdvertising: state.isAdvertising,
               isDiscovering: state.isDiscovering,
               isBlocked: !state.playServicesAvailable,
+              statusLine: _statusLineFor(state),
               lastEvent: state.lastEvent,
               onToggleMesh: state.meshStarted
                   ? ref.read(chatControllerProvider.notifier).stopMesh
@@ -301,11 +342,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               onToggleAdvertising: _toggleHomeAdvertising,
               onToggleDiscovering: _toggleHomeDiscovering,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 24),
             _QuickActions(
               onOpenPublicChat: _openPublicChat,
               onOpenNearby: () =>
-                  Navigator.of(context).pushNamed(AppRouter.nearby),
+                  unawaited(Navigator.of(context).pushNamed(AppRouter.nearby)),
+              onOpenWalkie: _openWalkie,
             ),
             if (unreadPrivateTotal > 0) ...[
               const SizedBox(height: 12),
@@ -314,9 +356,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 onTap: () => _openFirstUnreadPrivateChat(state),
               ),
             ],
-            const SizedBox(height: 20),
+            const SizedBox(height: 28),
             _SectionHeader(
-              title: 'Nearby',
+              title: 'Nearby Peers',
               trailing: unreadPrivateTotal > 0
                   ? '$unreadPrivateTotal unread'
                   : '${state.peers.length}',
@@ -336,22 +378,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               )
             else
               ...state.peers.map(
-                (peer) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: _PeerTile(
-                    peer: peer,
-                    unreadCount: peer.nodeId == null
-                        ? 0
-                        : state.unreadCountFor(peer.nodeId!),
-                    onTap: peer.nodeId == null
-                        ? null
-                        : () => _openPrivateChat(peer),
-                  ),
-                ),
+                (peer) {
+                  final contact = peer.nodeId == null
+                      ? null
+                      : state.knownContacts.cast<KnownContact?>().firstWhere(
+                          (c) => c?.nodeId == peer.nodeId,
+                          orElse: () => null,
+                        );
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _PeerTile(
+                      peer: peer,
+                      unreadCount: peer.nodeId == null
+                          ? 0
+                          : state.unreadCountFor(peer.nodeId!),
+                      onTap: peer.nodeId == null
+                          ? null
+                          : () => _openPrivateChat(peer),
+                      onLongPress: peer.nodeId == null
+                          ? null
+                          : () {
+                              showPeerProfileSheet(
+                                context,
+                                PeerProfileSnapshot(
+                                  displayName: peer.displayName,
+                                  nodeId: peer.nodeId!,
+                                  profileIconId: contact?.profileIconId,
+                                  profileStatus: contact?.profileStatus,
+                                  isOnline: true,
+                                ),
+                              );
+                            },
+                    ),
+                  );
+                },
               ),
             const SizedBox(height: 12),
             _SectionHeader(
-              title: 'Recent',
+              title: 'Recent Activity',
               trailing: state.messages.isEmpty
                   ? null
                   : '${state.messages.length}',
@@ -373,17 +437,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ],
         ),
       ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 8.0, right: 6.0),
-        child: FloatingActionButton.extended(
-          elevation: 6,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          onPressed: _openPublicChat,
-          icon: const Icon(Icons.forum),
-          label: const Text('Public chat'),
+      floatingActionButton: FloatingActionButton.extended(
+        elevation: 4,
+        hoverElevation: 6,
+        focusElevation: 6,
+        highlightElevation: 8,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
         ),
+        onPressed: _openPublicChat,
+        icon: const Icon(Icons.forum_rounded),
+        label: const Text('Public Chat', style: TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.2)),
       ),
     );
   }
@@ -404,6 +468,7 @@ class _MeshOverviewCard extends StatelessWidget {
   final bool isAdvertising;
   final bool isDiscovering;
   final bool isBlocked;
+  final String statusLine;
   final String? lastEvent;
   final Future<void> Function() onToggleMesh;
   final Future<void> Function() onRefreshPeers;
@@ -417,6 +482,7 @@ class _MeshOverviewCard extends StatelessWidget {
     required this.isAdvertising,
     required this.isDiscovering,
     required this.isBlocked,
+    required this.statusLine,
     required this.lastEvent,
     required this.onToggleMesh,
     required this.onRefreshPeers,
@@ -458,7 +524,7 @@ class _MeshOverviewCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
-                  online ? Icons.hub : Icons.hub_outlined,
+                  online ? Icons.hub_rounded : Icons.hub_outlined,
                   color: online ? onlineIconColor : cs.onErrorContainer,
                 ),
               ),
@@ -468,7 +534,7 @@ class _MeshOverviewCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      online ? 'Mesh online' : 'Mesh offline',
+                      online ? 'Mesh Online' : 'Mesh Offline',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -522,7 +588,7 @@ class _MeshOverviewCard extends StatelessWidget {
                         color: Colors.teal,
                         onTap: !isStarting ? onRefreshPeers : null,
                       ),
-                      const SizedBox(width: 7),
+                      const SizedBox(width: 8),
                       _MetricChip(
                         icon: Icons.campaign_outlined,
                         label: online ? 'Available' : 'Offline',
@@ -530,7 +596,7 @@ class _MeshOverviewCard extends StatelessWidget {
                         color: Colors.green,
                         onTap: online ? onToggleAdvertising : null,
                       ),
-                      const SizedBox(width: 7),
+                      const SizedBox(width: 8),
                       _MetricChip(
                         icon: Icons.search,
                         label: online ? 'Scanning' : 'Idle',
@@ -544,6 +610,14 @@ class _MeshOverviewCard extends StatelessWidget {
               );
             },
           ),
+          const SizedBox(height: 10),
+          Text(
+            statusLine,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: cs.onSurfaceVariant,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
         ],
       ),
     );
@@ -553,43 +627,60 @@ class _MeshOverviewCard extends StatelessWidget {
 class _QuickActions extends StatelessWidget {
   final VoidCallback onOpenPublicChat;
   final VoidCallback onOpenNearby;
+  final VoidCallback onOpenWalkie;
 
   const _QuickActions({
     required this.onOpenPublicChat,
     required this.onOpenNearby,
+    required this.onOpenWalkie,
   });
+
+  Widget _buildActionCard(BuildContext context, String title, IconData icon, VoidCallback onTap, {bool isPrimary = false}) {
+    final cs = Theme.of(context).colorScheme;
+    return Expanded(
+      child: Material(
+        color: isPrimary ? cs.primary : cs.surfaceContainerHighest.withAlpha(150),
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon,
+                  color: isPrimary ? cs.onPrimary : cs.primary,
+                  size: 28,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: isPrimary ? cs.onPrimary : cs.onSurface,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    letterSpacing: 0.1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Expanded(
-          child: FilledButton.icon(
-            onPressed: onOpenPublicChat,
-            icon: const Icon(Icons.forum_rounded),
-            label: const Text('Public'),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-        ),
+        _buildActionCard(context, 'Public', Icons.forum_rounded, onOpenPublicChat, isPrimary: true),
         const SizedBox(width: 12),
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: onOpenNearby,
-            icon: const Icon(Icons.radar_rounded),
-            label: const Text('Nearby'),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-        ),
+        _buildActionCard(context, 'Nearby', Icons.radar_rounded, onOpenNearby),
+        const SizedBox(width: 12),
+        _buildActionCard(context, 'Walkie', Icons.keyboard_voice_rounded, onOpenWalkie),
       ],
     );
   }
@@ -629,11 +720,13 @@ class _PeerTile extends StatelessWidget {
   final MeshPeer peer;
   final int unreadCount;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
 
   const _PeerTile({
     required this.peer,
     required this.unreadCount,
     required this.onTap,
+    this.onLongPress,
   });
 
   @override
@@ -641,45 +734,60 @@ class _PeerTile extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final canMessage = peer.nodeId != null;
 
-    return ListTile(
-      onTap: onTap,
+    return Card(
+      elevation: 0,
+      color: cs.surfaceContainerLowest,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: cs.outlineVariant.withAlpha(90)),
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: cs.outlineVariant.withAlpha(50)),
       ),
-      leading: CircleAvatar(
-        backgroundColor: canMessage
-            ? cs.primaryContainer
-            : cs.surfaceContainerHighest,
-        child: Icon(
-          canMessage ? Icons.person : Icons.sync,
-          color: canMessage ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
         ),
-      ),
-      title: Text(
-        peer.displayName.isEmpty ? 'Nearby device' : peer.displayName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Text(
-        peer.encryptionReady
-            ? 'Encrypted private chat ready'
-            : canMessage
-            ? 'Private chat available'
-            : 'Finishing setup',
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (unreadCount > 0) ...[
-            _UnreadBadge(count: unreadCount),
-            const SizedBox(width: 8),
-          ],
-          Icon(
-            canMessage ? Icons.chevron_right : Icons.more_horiz,
-            color: cs.onSurfaceVariant,
+        leading: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: canMessage ? cs.primaryContainer : cs.surfaceContainerHighest,
+            shape: BoxShape.circle,
           ),
-        ],
+          child: Icon(
+            canMessage ? Icons.person_rounded : Icons.sync_rounded,
+            color: canMessage ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+          ),
+        ),
+        title: Text(
+          peer.displayName.isEmpty ? 'Nearby device' : peer.displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          peer.encryptionReady
+              ? 'Encrypted private chat ready'
+              : canMessage
+                  ? 'Private chat available'
+                  : 'Finishing setup',
+          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (unreadCount > 0) ...[
+              _UnreadBadge(count: unreadCount),
+              const SizedBox(width: 8),
+            ],
+            Icon(
+              canMessage ? Icons.chevron_right_rounded : Icons.more_horiz_rounded,
+              color: cs.onSurfaceVariant,
+            ),
+          ],
+        ),
       ),
     );
   }

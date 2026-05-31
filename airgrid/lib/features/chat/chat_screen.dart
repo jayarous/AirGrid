@@ -17,6 +17,8 @@ import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/chat/message_bubble.dart';
 import 'package:airgrid/features/mesh_status/mesh_status_panel.dart';
+import 'package:airgrid/features/profile/peer_profile_sheet.dart';
+import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -891,6 +893,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         mimeType: 'audio/m4a',
         byteLength: bytes.length,
         durationMs: duration.inMilliseconds,
+        source: AudioAttachmentPayload.sourceVoiceNote,
         dataBase64: base64Encode(bytes),
         localTempPath: recordedPath,
       );
@@ -1198,6 +1201,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               child: _PeerBadge(count: peerCount, meshOn: meshStarted),
             ),
           ),
+          const PublicWalkieStatusIcon(),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
@@ -1293,6 +1297,58 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     behavior: SnackBarBehavior.floating,
                   ),
                 );
+              } else if (value == 'view_profile') {
+                final chatState = ref.read(chatControllerProvider);
+                final conv = chatState.selectedConversation;
+                if (conv is! PrivateConversation || !mounted) return;
+
+                final contact = chatState.knownContacts.cast<KnownContact?>().firstWhere(
+                  (c) => c?.nodeId == conv.peerNodeId,
+                  orElse: () => null,
+                );
+                final isOnline = chatState.peers.any((p) => p.nodeId == conv.peerNodeId);
+                await showPeerProfileSheet(
+                  context,
+                  PeerProfileSnapshot(
+                    displayName: conv.peerName,
+                    nodeId: conv.peerNodeId,
+                    profileIconId: contact?.profileIconId,
+                    profileStatus: contact?.profileStatus,
+                    isOnline: isOnline,
+                  ),
+                );
+              } else if (value == 'close_chat') {
+                final conv = ref
+                    .read(chatControllerProvider)
+                    .selectedConversation;
+                if (conv is! PrivateConversation) return;
+                await ref
+                    .read(chatControllerProvider.notifier)
+                    .closePrivateChat(conv.peerNodeId);
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Chat closed. History kept.'),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              } else if (value == 'reopen_chat') {
+                final conv = ref
+                    .read(chatControllerProvider)
+                    .selectedConversation;
+                if (conv is! PrivateConversation) return;
+                await ref
+                    .read(chatControllerProvider.notifier)
+                    .reopenPrivateChat(conv.peerNodeId);
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Chat reopened'),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
               }
             },
             itemBuilder: (_) {
@@ -1301,12 +1357,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               final isTrusted =
                   conv is PrivateConversation &&
                   chatState.trustedNodeIds.contains(conv.peerNodeId);
+              final isChatClosed =
+                  conv is PrivateConversation &&
+                  chatState.closedChatNodeIds.contains(conv.peerNodeId);
               return [
                 const PopupMenuItem(
                   value: 'clear_all',
                   child: Text('Clear all chats'),
                 ),
                 if (conv is PrivateConversation) ...[
+                  const PopupMenuItem(
+                    value: 'view_profile',
+                    child: Text('View profile'),
+                  ),
+                  PopupMenuItem(
+                    value: isChatClosed ? 'reopen_chat' : 'close_chat',
+                    child: Text(isChatClosed ? 'Reopen chat' : 'Close chat'),
+                  ),
                   if (isTrusted)
                     const PopupMenuItem(
                       value: 'untrust_contact',
@@ -1647,12 +1714,32 @@ class _ConversationPicker extends ConsumerWidget {
     final blockedNodeIds = ref.watch(
       chatControllerProvider.select((s) => s.blockedNodeIds),
     );
+    final closedNodeIds = ref.watch(
+      chatControllerProvider.select((s) => s.closedChatNodeIds),
+    );
+    final showOnlineOnly = ref.watch(
+      chatControllerProvider.select((s) => s.showOnlineOnly),
+    );
+    final showClosedChats = ref.watch(
+      chatControllerProvider.select((s) => s.showClosedChats),
+    );
+    final showFriendsOnly = ref.watch(
+      chatControllerProvider.select((s) => s.showFriendsOnly),
+    );
+    final trustedNodeIds = ref.watch(
+      chatControllerProvider.select((s) => s.trustedNodeIds),
+    );
     final cs = Theme.of(context).colorScheme;
     final privateThreads = _privateThreadsFrom(
       peers,
       messages,
       knownContacts,
       blockedNodeIds,
+      closedNodeIds,
+      trustedNodeIds,
+      showOnlineOnly,
+      showClosedChats,
+      showFriendsOnly,
     );
 
     return Container(
@@ -1668,6 +1755,39 @@ class _ConversationPicker extends ConsumerWidget {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
+            FilterChip(
+              label: const Text('Online'),
+              selected: showOnlineOnly,
+              onSelected: (enabled) {
+                ref
+                    .read(chatControllerProvider.notifier)
+                    .setShowOnlineOnly(enabled);
+              },
+              showCheckmark: false,
+            ),
+            const SizedBox(width: 8),
+            FilterChip(
+              label: const Text('Closed'),
+              selected: showClosedChats,
+              onSelected: (enabled) {
+                ref
+                    .read(chatControllerProvider.notifier)
+                    .setShowClosedChats(enabled);
+              },
+              showCheckmark: false,
+            ),
+            const SizedBox(width: 8),
+            FilterChip(
+              label: const Text('Friends'),
+              selected: showFriendsOnly,
+              onSelected: (enabled) {
+                ref
+                    .read(chatControllerProvider.notifier)
+                    .setShowFriendsOnly(enabled);
+              },
+              showCheckmark: false,
+            ),
+            const SizedBox(width: 8),
             ChoiceChip(
               avatar: Icon(
                 Icons.public_rounded,
@@ -1697,51 +1817,68 @@ class _ConversationPicker extends ConsumerWidget {
 
               return Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: ChoiceChip(
-                  avatar: isReady
-                      ? Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: thread.isConnected
-                                ? Colors.green
-                                : cs.outline.withAlpha(150),
-                            shape: BoxShape.circle,
-                            boxShadow: thread.isConnected
-                                ? [
-                                    BoxShadow(
-                                      color: Colors.green.withAlpha(120),
-                                      blurRadius: 4,
-                                      spreadRadius: 1,
-                                    ),
-                                  ]
-                                : null,
-                          ),
-                        )
-                      : const SizedBox(
-                          width: 10,
-                          height: 10,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.5,
-                            valueColor: AlwaysStoppedAnimation(Colors.orange),
-                          ),
-                        ),
-                  label: _ConversationChipLabel(
-                    label: isReady ? label : '$label (setting up)',
-                    unreadCount: isSelected ? 0 : unreadCount,
-                  ),
-                  selected: isSelected,
-                  showCheckmark: false,
-                  onSelected: isReady
-                      ? (_) => ref
-                            .read(chatControllerProvider.notifier)
-                            .selectConversation(
-                              PrivateConversation(
-                                peerNodeId: peerNodeId!,
-                                peerName: thread.displayName,
-                              ),
-                            )
+                child: GestureDetector(
+                  onLongPress: isReady
+                      ? () {
+                          showPeerProfileSheet(
+                            context,
+                            PeerProfileSnapshot(
+                              displayName: thread.displayName,
+                              nodeId: peerNodeId!,
+                              profileIconId: thread.profileIconId,
+                              profileStatus: thread.profileStatus,
+                              isOnline: thread.isConnected,
+                            ),
+                          );
+                        }
                       : null,
+                  child: ChoiceChip(
+                    avatar: isReady
+                        ? Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: thread.isConnected
+                                  ? Colors.green
+                                  : cs.outline.withAlpha(150),
+                              shape: BoxShape.circle,
+                              boxShadow: thread.isConnected
+                                  ? [
+                                      BoxShadow(
+                                        color: Colors.green.withAlpha(120),
+                                        blurRadius: 4,
+                                        spreadRadius: 1,
+                                      ),
+                                    ]
+                                  : null,
+                            ),
+                          )
+                        : const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              valueColor: AlwaysStoppedAnimation(Colors.orange),
+                            ),
+                          ),
+                    label: _ConversationChipLabel(
+                      label: isReady ? label : '$label (setting up)',
+                      unreadCount: isSelected ? 0 : unreadCount,
+                      isClosed: thread.isClosed,
+                    ),
+                    selected: isSelected,
+                    showCheckmark: false,
+                    onSelected: isReady
+                        ? (_) => ref
+                              .read(chatControllerProvider.notifier)
+                              .selectConversation(
+                                PrivateConversation(
+                                  peerNodeId: peerNodeId!,
+                                  peerName: thread.displayName,
+                                ),
+                              )
+                        : null,
+                  ),
                 ),
               );
             }),
@@ -1759,6 +1896,11 @@ List<_PrivateThreadTarget> _privateThreadsFrom(
   List<AirGridMessage> messages,
   List<KnownContact> knownContacts,
   Set<String> blockedNodeIds,
+  Set<String> closedNodeIds,
+  Set<String> trustedNodeIds,
+  bool showOnlineOnly,
+  bool showClosedChats,
+  bool showFriendsOnly,
 ) {
   final threads = <String, _PrivateThreadTarget>{};
   final pendingPeers = <_PrivateThreadTarget>[];
@@ -1776,6 +1918,10 @@ List<_PrivateThreadTarget> _privateThreadsFrom(
       peerNodeId: contact.nodeId,
       displayName: contact.displayName,
       isConnected: connectedNodeIds.contains(contact.nodeId),
+      isClosed: contact.isChatClosed,
+      isTrusted: contact.isTrusted,
+      profileIconId: contact.profileIconId,
+      profileStatus: contact.profileStatus,
     );
   }
 
@@ -1789,6 +1935,8 @@ List<_PrivateThreadTarget> _privateThreadsFrom(
           peerNodeId: null,
           displayName: peer.displayName,
           isConnected: true,
+          isClosed: false,
+          isTrusted: false,
         ),
       );
     } else if (!threads.containsKey(nodeId)) {
@@ -1796,6 +1944,8 @@ List<_PrivateThreadTarget> _privateThreadsFrom(
         peerNodeId: nodeId,
         displayName: peer.displayName,
         isConnected: true,
+        isClosed: closedNodeIds.contains(nodeId),
+        isTrusted: trustedNodeIds.contains(nodeId),
       );
     }
   }
@@ -1803,6 +1953,7 @@ List<_PrivateThreadTarget> _privateThreadsFrom(
   // Add historical threads from messages not already covered above.
   for (final msg in messages) {
     if (msg.conversationType != 'private') continue;
+    if (msg.content == '[walkie]') continue;
     final peerNodeId = msg.peerNodeId;
     if (peerNodeId == null || peerNodeId.isEmpty) continue;
     if (blockedNodeIds.contains(peerNodeId)) continue;
@@ -1812,36 +1963,66 @@ List<_PrivateThreadTarget> _privateThreadsFrom(
       peerNodeId: peerNodeId,
       displayName: displayName,
       isConnected: false,
+      isClosed: closedNodeIds.contains(peerNodeId),
+      isTrusted: trustedNodeIds.contains(peerNodeId),
     );
   }
 
-  return [...threads.values, ...pendingPeers];
+  final hasActiveFilter = showOnlineOnly || showClosedChats || showFriendsOnly;
+
+  final visibleThreads = threads.values.where((t) {
+    // Default view: hide closed chats unless a filter is active.
+    if (!hasActiveFilter) {
+      return !t.isClosed;
+    }
+
+    final matchesOnline = showOnlineOnly && t.isConnected && t.isTrusted;
+    final matchesClosed = showClosedChats && t.isClosed;
+    final matchesFriends = showFriendsOnly && t.isTrusted && !t.isClosed;
+    return matchesOnline || matchesClosed || matchesFriends;
+  }).toList();
+
+  // Pending peers are shown only in the default open-chat view.
+  final visiblePendingPeers = hasActiveFilter
+      ? const <_PrivateThreadTarget>[]
+      : pendingPeers;
+  return [...visibleThreads, ...visiblePendingPeers];
 }
 
 class _PrivateThreadTarget {
   final String? peerNodeId;
   final String displayName;
   final bool isConnected;
+  final bool isClosed;
+  final bool isTrusted;
+  final String? profileIconId;
+  final String? profileStatus;
 
   const _PrivateThreadTarget({
     required this.peerNodeId,
     required this.displayName,
     required this.isConnected,
+    required this.isClosed,
+    required this.isTrusted,
+    this.profileIconId,
+    this.profileStatus,
   });
 }
 
 class _ConversationChipLabel extends StatelessWidget {
   final String label;
   final int unreadCount;
+  final bool isClosed;
 
   const _ConversationChipLabel({
     required this.label,
     required this.unreadCount,
+    required this.isClosed,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (unreadCount <= 0) {
+    if (unreadCount <= 0 && !isClosed) {
       return Text(label);
     }
 
@@ -1850,6 +2031,18 @@ class _ConversationChipLabel extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(label),
+        if (isClosed) ...[
+          const SizedBox(width: 6),
+          Text(
+            'Closed',
+            style: TextStyle(
+              color: cs.outline,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+        if (unreadCount > 0) ...[
         const SizedBox(width: 6),
         Container(
           constraints: const BoxConstraints(minWidth: 18),
@@ -1868,6 +2061,7 @@ class _ConversationChipLabel extends StatelessWidget {
             ),
           ),
         ),
+        ],
       ],
     );
   }

@@ -1,13 +1,16 @@
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
+import 'package:airgrid/data/storage/chat_list_preferences_store.dart';
 import 'package:airgrid/data/storage/known_contact_store.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
 import 'package:airgrid/data/storage/message_repository.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
+import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
+import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:flutter/widgets.dart';
@@ -103,6 +106,8 @@ ProviderContainer _container({
   required LocalIdentityStore identity,
   _RecordingMessageRepository? repository,
   BatterySettingsStore? batteryStore,
+  KnownContactStore? contactStore,
+  ChatListPreferencesStore? chatListPreferencesStore,
 }) {
   return ProviderContainer(
     overrides: [
@@ -114,13 +119,21 @@ ProviderContainer _container({
       playServicesProvider.overrideWithValue(playServices),
       foregroundServiceProvider.overrideWithValue(foreground),
       cryptoServiceProvider.overrideWithValue(CryptoService()),
-      knownContactStoreProvider.overrideWithValue(InMemoryKnownContactStore()),
+      knownContactStoreProvider.overrideWithValue(
+        contactStore ?? InMemoryKnownContactStore(),
+      ),
       localReportStoreProvider.overrideWithValue(InMemoryLocalReportStore()),
       privacySettingsStoreProvider.overrideWithValue(
         InMemoryPrivacySettingsStore(),
       ),
+      publicWalkieSettingsStoreProvider.overrideWithValue(
+        InMemoryPublicWalkieSettingsStore(),
+      ),
       batterySettingsStoreProvider.overrideWithValue(
         batteryStore ?? InMemoryBatterySettingsStore(),
+      ),
+      chatListPreferencesStoreProvider.overrideWithValue(
+        chatListPreferencesStore ?? InMemoryChatListPreferencesStore(),
       ),
     ],
   );
@@ -235,7 +248,9 @@ void main() {
     addTearDown(foreground.dispose);
 
     await container.read(chatControllerProvider.notifier).startMesh();
-    await Future<void>.delayed(Duration.zero);
+    // Trigger provider build, then wait for async preference load.
+    container.read(chatControllerProvider);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
     final state = container.read(chatControllerProvider);
 
     expect(state.messages, hasLength(1000));
@@ -482,5 +497,70 @@ void main() {
     await controller.setDiscoveryEnabled(true);
     expect(container.read(chatControllerProvider).isDiscovering, isTrue);
     expect(transport.startDiscoveryCount, 1);
+  });
+
+  test('chat list filter setters persist and update state', () async {
+    final transport = FakeTransport();
+    final foreground = FakeForegroundService();
+    final playServices = FakePlayServices(const PlayServicesStatus.available());
+    final prefsStore = InMemoryChatListPreferencesStore(
+      initialShowOnlineOnly: true,
+      initialShowClosedChats: true,
+    );
+    final container = _container(
+      transport: transport,
+      playServices: playServices,
+      foreground: foreground,
+      identity: await _identity(),
+      chatListPreferencesStore: prefsStore,
+    );
+    addTearDown(container.dispose);
+    addTearDown(foreground.dispose);
+
+    final controller = container.read(chatControllerProvider.notifier);
+    await controller.setShowOnlineOnly(true);
+    await controller.setShowClosedChats(true);
+    final state = container.read(chatControllerProvider);
+    expect(state.showOnlineOnly, isTrue);
+    expect(state.showClosedChats, isTrue);
+    expect(prefsStore.currentShowOnlineOnly, isTrue);
+    expect(prefsStore.currentShowClosedChats, isTrue);
+  });
+
+  test('closePrivateChat closes thread and resets selected conversation', () async {
+    final transport = FakeTransport();
+    final foreground = FakeForegroundService();
+    final playServices = FakePlayServices(const PlayServicesStatus.available());
+    final contacts = InMemoryKnownContactStore();
+    await contacts.upsert(
+      KnownContact(
+        nodeId: 'node-1',
+        displayName: 'Peer 1',
+        publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        lastSeenAt: DateTime(2026, 1, 1),
+      ),
+    );
+    final container = _container(
+      transport: transport,
+      playServices: playServices,
+      foreground: foreground,
+      identity: await _identity(),
+      contactStore: contacts,
+    );
+    addTearDown(container.dispose);
+    addTearDown(foreground.dispose);
+
+    final controller = container.read(chatControllerProvider.notifier);
+    controller.selectConversation(
+      const PrivateConversation(peerNodeId: 'node-1', peerName: 'Peer 1'),
+    );
+
+    await controller.closePrivateChat('node-1');
+    final state = container.read(chatControllerProvider);
+    expect(contacts.isChatClosed('node-1'), isTrue);
+    expect(state.selectedConversation, isA<PublicConversation>());
+
+    await controller.reopenPrivateChat('node-1');
+    expect(contacts.isChatClosed('node-1'), isFalse);
   });
 }

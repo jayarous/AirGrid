@@ -74,12 +74,15 @@ class ImageAttachmentPayload {
 /// Versioned envelope carried in packet content for private voice-note messages.
 class AudioAttachmentPayload {
   static const int currentVersion = 1;
+  static const String sourceVoiceNote = 'voice_note';
+  static const String sourceWalkie = 'walkie';
 
   final int version;
   final String transferId;
   final String mimeType;
   final int byteLength;
   final int? durationMs;
+  final String? source;
   final String dataBase64;
   final String? localTempPath;
 
@@ -90,6 +93,7 @@ class AudioAttachmentPayload {
     required this.byteLength,
     required this.dataBase64,
     this.durationMs,
+    this.source,
     this.localTempPath,
   });
 
@@ -102,6 +106,7 @@ class AudioAttachmentPayload {
     'mimeType': mimeType,
     'byteLength': byteLength,
     if (durationMs != null) 'durationMs': durationMs,
+    if (source != null) 'source': source,
     'data': dataBase64,
   };
 
@@ -129,6 +134,7 @@ class AudioAttachmentPayload {
         mimeType: mimeType,
         byteLength: byteLength,
         durationMs: json['durationMs'] as int?,
+        source: json['source'] as String?,
         dataBase64: dataBase64,
       );
     } catch (_) {

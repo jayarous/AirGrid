@@ -13,6 +13,7 @@ KnownContact _contact(
   String nodeId, {
   bool isBlocked = false,
   bool isTrusted = false,
+  bool isChatClosed = false,
 }) {
   return KnownContact(
     nodeId: nodeId,
@@ -21,6 +22,7 @@ KnownContact _contact(
     lastSeenAt: DateTime(2024, 1, 1),
     isBlocked: isBlocked,
     isTrusted: isTrusted,
+    isChatClosed: isChatClosed,
   );
 }
 
@@ -197,6 +199,58 @@ void _trustTests(
   });
 }
 
+void _chatCloseTests(
+  String label,
+  Future<KnownContactStore> Function() makeStore,
+) {
+  group(label, () {
+    late KnownContactStore store;
+
+    setUp(() async {
+      store = await makeStore();
+    });
+
+    tearDown(() => store.dispose());
+
+    test('closeChat marks contact chat as closed', () async {
+      await store.upsert(_contact('node-1'));
+      await store.closeChat('node-1');
+      expect(store.isChatClosed('node-1'), isTrue);
+    });
+
+    test('reopenChat clears closed state', () async {
+      await store.upsert(_contact('node-1', isChatClosed: true));
+      await store.reopenChat('node-1');
+      expect(store.isChatClosed('node-1'), isFalse);
+    });
+
+    test('closedContacts returns only closed chats', () async {
+      await store.upsert(_contact('node-1'));
+      await store.upsert(_contact('node-2', isChatClosed: true));
+      await store.upsert(_contact('node-3', isChatClosed: true));
+
+      final ids = store.closedContacts.map((c) => c.nodeId).toSet();
+      expect(ids, equals({'node-2', 'node-3'}));
+    });
+
+    test('upsert preserves existing closed chat state', () async {
+      await store.upsert(_contact('node-1'));
+      await store.closeChat('node-1');
+
+      await store.upsert(
+        KnownContact(
+          nodeId: 'node-1',
+          displayName: 'Updated name',
+          publicKeyBase64: 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=',
+          lastSeenAt: DateTime(2024, 1, 2),
+        ),
+      );
+
+      expect(store.isChatClosed('node-1'), isTrue);
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // SharedPrefs-specific tests
 // ---------------------------------------------------------------------------
@@ -247,6 +301,17 @@ void _sharedPrefsTests() {
       expect(store2.isBlocked('node-1'), isTrue);
       await store2.dispose();
     });
+
+    test('closed chat state persists across instantiations', () async {
+      final store1 = await SharedPrefsKnownContactStore.create();
+      await store1.upsert(_contact('node-1'));
+      await store1.closeChat('node-1');
+      await store1.dispose();
+
+      final store2 = await SharedPrefsKnownContactStore.create();
+      expect(store2.isChatClosed('node-1'), isTrue);
+      await store2.dispose();
+    });
   });
 }
 
@@ -288,4 +353,20 @@ void main() {
   });
 
   _sharedPrefsTests();
+
+  _chatCloseTests(
+    'InMemoryKnownContactStore — close chat',
+    () async => InMemoryKnownContactStore(),
+  );
+
+  group('SharedPrefsKnownContactStore — close chat', () {
+    setUp(() => SharedPreferences.setMockInitialValues({}));
+    _chatCloseTests(
+      'SharedPrefsKnownContactStore (close chat contract)',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        return SharedPrefsKnownContactStore.create();
+      },
+    );
+  });
 }

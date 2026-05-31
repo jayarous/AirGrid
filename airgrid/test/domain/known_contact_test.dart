@@ -6,6 +6,7 @@ KnownContact _contact({
   String displayName = 'Alice',
   bool isBlocked = false,
   bool isTrusted = false,
+  bool isChatClosed = false,
 }) {
   return KnownContact(
     nodeId: nodeId,
@@ -14,6 +15,7 @@ KnownContact _contact({
     lastSeenAt: DateTime(2024, 1, 1),
     isBlocked: isBlocked,
     isTrusted: isTrusted,
+    isChatClosed: isChatClosed,
   );
 }
 
@@ -131,6 +133,42 @@ void main() {
       final original = _contact(isTrusted: true);
       final restored = KnownContact.fromJson(original.toJson());
       expect(restored.isTrusted, isTrue);
+    });
+  });
+
+  group('KnownContact.isChatClosed', () {
+    test('defaults to false in constructor', () {
+      final c = _contact();
+      expect(c.isChatClosed, isFalse);
+    });
+
+    test('fromJson without isChatClosed field defaults to false', () {
+      final json = {
+        'nodeId': 'node-1',
+        'displayName': 'Alice',
+        'publicKeyBase64': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        'lastSeenAt': DateTime(2024, 1, 1).millisecondsSinceEpoch,
+      };
+      final c = KnownContact.fromJson(json);
+      expect(c.isChatClosed, isFalse);
+    });
+
+    test('toJson includes isChatClosed', () {
+      final c = _contact(isChatClosed: true);
+      final json = c.toJson();
+      expect(json['isChatClosed'], isTrue);
+    });
+
+    test('copyWith(isChatClosed: true) changes value', () {
+      final c = _contact();
+      final closed = c.copyWith(isChatClosed: true);
+      expect(closed.isChatClosed, isTrue);
+    });
+
+    test('roundtrip toJson / fromJson preserves isChatClosed', () {
+      final original = _contact(isChatClosed: true);
+      final restored = KnownContact.fromJson(original.toJson());
+      expect(restored.isChatClosed, isTrue);
     });
   });
 }

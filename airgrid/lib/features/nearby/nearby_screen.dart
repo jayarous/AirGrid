@@ -2,12 +2,15 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:airgrid/app/app_router.dart';
+import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/domain/models/local_report.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/models/peer_location.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/nearby/nearby_preferences.dart';
+import 'package:airgrid/features/profile/peer_profile_sheet.dart';
+import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,7 +26,10 @@ class NearbyScreen extends ConsumerWidget {
     final nearbyBlocked = !state.playServicesAvailable;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Nearby')),
+      appBar: AppBar(
+        title: const Text('Nearby'),
+        actions: const [PublicWalkieStatusIcon()],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
@@ -84,6 +90,12 @@ class NearbyScreen extends ConsumerWidget {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: _NearbyPeerTile(
                   peer: peer,
+                  contactProfile: peer.nodeId == null
+                      ? null
+                      : state.knownContacts.cast<KnownContact?>().firstWhere(
+                          (c) => c?.nodeId == peer.nodeId,
+                          orElse: () => null,
+                        ),
                   localLocation: state.localLocation,
                   peerLocation: peer.nodeId == null
                       ? null
@@ -100,6 +112,19 @@ class NearbyScreen extends ConsumerWidget {
                                 ),
                               );
                           Navigator.of(context).pushNamed(AppRouter.chat);
+                        },
+                  onWalkie: peer.nodeId == null
+                      ? null
+                      : () {
+                          ref
+                              .read(chatControllerProvider.notifier)
+                              .selectConversation(
+                                PrivateConversation(
+                                  peerNodeId: peer.nodeId!,
+                                  peerName: peer.displayName,
+                                ),
+                              );
+                          Navigator.of(context).pushNamed(AppRouter.walkie);
                         },
                   isTrusted: peer.nodeId != null &&
                       state.trustedNodeIds.contains(peer.nodeId),
@@ -673,9 +698,11 @@ class _LocationSharingPanel extends StatelessWidget {
 
 class _NearbyPeerTile extends StatelessWidget {
   final MeshPeer peer;
+  final KnownContact? contactProfile;
   final PeerLocation? localLocation;
   final PeerLocation? peerLocation;
   final VoidCallback? onTap;
+  final VoidCallback? onWalkie;
   final bool isTrusted;
   final VoidCallback? onTrust;
   final VoidCallback? onUntrust;
@@ -684,9 +711,11 @@ class _NearbyPeerTile extends StatelessWidget {
 
   const _NearbyPeerTile({
     required this.peer,
+    this.contactProfile,
     required this.localLocation,
     required this.peerLocation,
     required this.onTap,
+    this.onWalkie,
     this.isTrusted = false,
     this.onTrust,
     this.onUntrust,
@@ -744,6 +773,25 @@ class _NearbyPeerTile extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (peer.nodeId != null)
+              ListTile(
+                leading: const Icon(Icons.account_circle_outlined),
+                title: const Text('View profile'),
+                onTap: () {
+                  Navigator.pop(context);
+                  final nodeId = peer.nodeId!;
+                  showPeerProfileSheet(
+                    context,
+                    PeerProfileSnapshot(
+                      displayName: peer.displayName,
+                      nodeId: nodeId,
+                      profileIconId: contactProfile?.profileIconId,
+                      profileStatus: contactProfile?.profileStatus,
+                      isOnline: true,
+                    ),
+                  );
+                },
+              ),
             if (isTrusted && onUntrust != null)
               ListTile(
                 leading: const Icon(Icons.verified_outlined),
@@ -769,6 +817,15 @@ class _NearbyPeerTile extends StatelessWidget {
                 onTap: () {
                   Navigator.pop(context);
                   onReport!();
+                },
+              ),
+            if (onWalkie != null)
+              ListTile(
+                leading: const Icon(Icons.keyboard_voice_rounded),
+                title: const Text('Open walkie-talkie'),
+                onTap: () {
+                  Navigator.pop(context);
+                  onWalkie!();
                 },
               ),
             if (onBlock != null)

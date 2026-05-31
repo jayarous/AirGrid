@@ -54,6 +54,24 @@ abstract class KnownContactStore {
   /// Silently ignores an unknown or already-untrusted [nodeId].
   Future<void> untrust(String nodeId);
 
+  /// Sets whether private walkie should auto-start for the contact.
+  Future<void> setWalkieAlwaysOn(String nodeId, bool enabled);
+
+  /// Returns true if private walkie auto-start is enabled for [nodeId].
+  bool isWalkieAlwaysOn(String nodeId);
+
+  /// Marks the private chat with [nodeId] as closed (hidden by default).
+  Future<void> closeChat(String nodeId);
+
+  /// Reopens a previously closed private chat with [nodeId].
+  Future<void> reopenChat(String nodeId);
+
+  /// Returns true if the private chat with [nodeId] is currently closed.
+  bool isChatClosed(String nodeId);
+
+  /// All contacts whose private chats are currently closed.
+  List<KnownContact> get closedContacts;
+
   /// Returns true if the contact identified by [nodeId] is currently trusted.
   bool isTrusted(String nodeId);
 
@@ -124,6 +142,8 @@ class SharedPrefsKnownContactStore implements KnownContactStore {
             lastEndpointId: contact.lastEndpointId ?? existing.lastEndpointId,
             isBlocked: existing.isBlocked,
             isTrusted: existing.isTrusted,
+            walkieAlwaysOn: existing.walkieAlwaysOn,
+            isChatClosed: existing.isChatClosed,
           );
     _emit();
     unawaited(_persist());
@@ -176,13 +196,51 @@ class SharedPrefsKnownContactStore implements KnownContactStore {
   Future<void> untrust(String nodeId) async {
     final c = _contacts[nodeId];
     if (c == null || !c.isTrusted) return;
-    _contacts[nodeId] = c.copyWith(isTrusted: false);
+    _contacts[nodeId] = c.copyWith(isTrusted: false, walkieAlwaysOn: false);
+    _emit();
+    unawaited(_persist());
+  }
+
+  @override
+  Future<void> setWalkieAlwaysOn(String nodeId, bool enabled) async {
+    final c = _contacts[nodeId];
+    if (c == null || c.walkieAlwaysOn == enabled) return;
+    _contacts[nodeId] = c.copyWith(walkieAlwaysOn: enabled);
     _emit();
     unawaited(_persist());
   }
 
   @override
   bool isTrusted(String nodeId) => _contacts[nodeId]?.isTrusted ?? false;
+
+  @override
+  bool isWalkieAlwaysOn(String nodeId) =>
+      _contacts[nodeId]?.walkieAlwaysOn ?? false;
+
+  @override
+  Future<void> closeChat(String nodeId) async {
+    final c = _contacts[nodeId];
+    if (c == null || c.isChatClosed) return;
+    _contacts[nodeId] = c.copyWith(isChatClosed: true);
+    _emit();
+    unawaited(_persist());
+  }
+
+  @override
+  Future<void> reopenChat(String nodeId) async {
+    final c = _contacts[nodeId];
+    if (c == null || !c.isChatClosed) return;
+    _contacts[nodeId] = c.copyWith(isChatClosed: false);
+    _emit();
+    unawaited(_persist());
+  }
+
+  @override
+  bool isChatClosed(String nodeId) => _contacts[nodeId]?.isChatClosed ?? false;
+
+  @override
+  List<KnownContact> get closedContacts =>
+      List.unmodifiable(_contacts.values.where((c) => c.isChatClosed).toList());
 
   @override
   List<KnownContact> get trustedContacts =>
@@ -220,6 +278,8 @@ class InMemoryKnownContactStore implements KnownContactStore {
             lastEndpointId: contact.lastEndpointId ?? existing.lastEndpointId,
             isBlocked: existing.isBlocked,
             isTrusted: existing.isTrusted,
+            walkieAlwaysOn: existing.walkieAlwaysOn,
+            isChatClosed: existing.isChatClosed,
           );
     _emit();
   }
@@ -267,12 +327,47 @@ class InMemoryKnownContactStore implements KnownContactStore {
   Future<void> untrust(String nodeId) async {
     final c = _contacts[nodeId];
     if (c == null || !c.isTrusted) return;
-    _contacts[nodeId] = c.copyWith(isTrusted: false);
+    _contacts[nodeId] = c.copyWith(isTrusted: false, walkieAlwaysOn: false);
     _emit();
   }
 
   @override
+  Future<void> setWalkieAlwaysOn(String nodeId, bool enabled) async {
+    final c = _contacts[nodeId];
+    if (c == null || c.walkieAlwaysOn == enabled) return;
+    _contacts[nodeId] = c.copyWith(walkieAlwaysOn: enabled);
+    _emit();
+  }
+
+  @override
+  Future<void> closeChat(String nodeId) async {
+    final c = _contacts[nodeId];
+    if (c == null || c.isChatClosed) return;
+    _contacts[nodeId] = c.copyWith(isChatClosed: true);
+    _emit();
+  }
+
+  @override
+  Future<void> reopenChat(String nodeId) async {
+    final c = _contacts[nodeId];
+    if (c == null || !c.isChatClosed) return;
+    _contacts[nodeId] = c.copyWith(isChatClosed: false);
+    _emit();
+  }
+
+  @override
+  bool isChatClosed(String nodeId) => _contacts[nodeId]?.isChatClosed ?? false;
+
+  @override
+  List<KnownContact> get closedContacts =>
+      List.unmodifiable(_contacts.values.where((c) => c.isChatClosed).toList());
+
+  @override
   bool isTrusted(String nodeId) => _contacts[nodeId]?.isTrusted ?? false;
+
+  @override
+  bool isWalkieAlwaysOn(String nodeId) =>
+      _contacts[nodeId]?.walkieAlwaysOn ?? false;
 
   @override
   List<KnownContact> get trustedContacts =>

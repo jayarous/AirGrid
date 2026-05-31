@@ -597,7 +597,9 @@ class _AudioMessageContentState extends State<_AudioMessageContent> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'Voice note',
+                          widget.message.content == '[walkie]'
+                              ? 'Walkie clip'
+                              : 'Voice note',
                           style: TextStyle(
                             color: widget.textColor,
                             fontSize: 12,

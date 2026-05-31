@@ -27,6 +27,13 @@ import 'package:airgrid/domain/services/relay_controller.dart';
 import 'package:airgrid/domain/services/transport_service.dart';
 import 'package:uuid/uuid.dart';
 
+class _KeyAnnounceProfileMeta {
+  final String? iconId;
+  final String? status;
+
+  const _KeyAnnounceProfileMeta({this.iconId, this.status});
+}
+
 // -- Spool entry -------------------------------------------------------
 
 /// A single packet held in the store-and-forward spool.
@@ -355,6 +362,60 @@ class AirGridMeshService {
     );
   }
 
+  /// Send a walkie-talkie voice clip to all peers on the public channel.
+  ///
+  /// Broadcasts unencrypted audio to every connected endpoint, similar to
+  /// [sendMessage] but with [packetType] set to 'audio'. No invite/session
+  /// handshake is required.
+  Future<void> sendPublicAudio(AudioAttachmentPayload audio) async {
+    if (!_outboundLimiter.allow()) {
+      throw StateError('Audio rate limited. Please wait before transmitting again.');
+    }
+
+    final localNodeId = _identity.nodeId;
+    final packet = AirGridPacket(
+      messageId: const Uuid().v4(),
+      senderNodeId: localNodeId,
+      senderName: _identity.displayName ?? 'Unknown',
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      content: audio.toWire(),
+      seenByNodes: [localNodeId],
+      hopLimit: AirGridConstants.kHopLimit,
+      packetType: 'audio',
+      // conversationType defaults to 'public'
+    );
+
+    _messageCache.add(packet.messageId);
+
+    // Emit a local copy so the sender sees their own transmission.
+    _messageController.add(
+      AirGridMessage.fromPacket(
+        packet.copyWith(content: '[walkie]'),
+        localNodeId,
+        messageKind: 'audio',
+        mediaMimeType: audio.mimeType,
+        mediaByteLength: audio.byteLength,
+        mediaTransferId: audio.transferId,
+        mediaDurationMs: audio.durationMs,
+        mediaTempPath: audio.localTempPath,
+      ),
+    );
+
+    final targets = _transport.connectedEndpoints.toList();
+    if (targets.isNotEmpty) {
+      for (final outgoing in PacketFragmenter.fragment(packet)) {
+        await _transport.sendToEndpoints(
+          targets,
+          TransportCodec.encode(outgoing),
+        );
+      }
+    }
+    AirGridLogger.log(
+      LogCategory.routing,
+      'Sent public walkie ${packet.messageId} to ${targets.length} peer(s)',
+    );
+  }
+
   /// Send a private message directly to [peer].
   ///
   /// Prefers encryption; if encryption is unavailable and [allowPlaintextFallback]
@@ -503,13 +564,23 @@ class AirGridMeshService {
     final publicKeyB64 = _identity.publicKeyBase64;
     if (publicKeyB64 == null) return;
 
+    final profileMeta = <String, dynamic>{};
+    final profileIconId = _identity.profileIconId.trim();
+    final profileStatus = _identity.profileStatus?.trim();
+    if (profileIconId.isNotEmpty) {
+      profileMeta['profileIconId'] = profileIconId;
+    }
+    if (profileStatus != null && profileStatus.isNotEmpty) {
+      profileMeta['profileStatus'] = profileStatus;
+    }
+
     final localNodeId = _identity.nodeId;
     final packet = AirGridPacket(
       messageId: const Uuid().v4(),
       senderNodeId: localNodeId,
       senderName: _identity.displayName ?? 'Unknown',
       timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: '',
+      content: profileMeta.isEmpty ? '' : jsonEncode(profileMeta),
       seenByNodes: [localNodeId],
       hopLimit: AirGridConstants.kHopLimit,
       packetType: 'key_announce',
@@ -998,9 +1069,12 @@ class AirGridMeshService {
     _rememberReceiptAlias(packet.messageId, messageId);
 
     if (emitLocalMessage) {
+      final audioContent = audio.source == AudioAttachmentPayload.sourceWalkie
+          ? '[walkie]'
+          : '[voice]';
       _messageController.add(
         AirGridMessage.fromPacket(
-          packet.copyWith(content: '[voice]'),
+          packet.copyWith(content: audioContent),
           localNodeId,
           conversationType: 'private',
           peerNodeId: recipientNodeId,
@@ -1118,9 +1192,12 @@ class AirGridMeshService {
     _rememberReceiptAlias(packet.messageId, messageId);
 
     if (emitLocalMessage) {
+      final audioContent = audio.source == AudioAttachmentPayload.sourceWalkie
+          ? '[walkie]'
+          : '[voice]';
       _messageController.add(
         AirGridMessage.fromPacket(
-          packet.copyWith(content: '[voice]'),
+          packet.copyWith(content: audioContent),
           localNodeId,
           conversationType: 'private',
           peerNodeId: contact.nodeId,
@@ -1990,7 +2067,11 @@ class AirGridMeshService {
     }
 
     return AirGridMessage.fromPacket(
-      packet.copyWith(content: '[voice]'),
+      packet.copyWith(
+        content: payload.source == AudioAttachmentPayload.sourceWalkie
+            ? '[walkie]'
+            : '[voice]',
+      ),
       localNodeId,
       conversationType: packet.conversationType,
       peerNodeId: isPrivate ? packet.senderNodeId : null,
@@ -2436,6 +2517,8 @@ class AirGridMeshService {
     // Cache the public key for future opportunistic encryption.
     _cryptoService.cacheKey(packet.senderNodeId, publicKeyB64);
 
+    final profileMeta = _parseKeyAnnounceProfileMeta(packet.content);
+
     // Persist/update the known contact. The direct endpoint (if any) is set
     // later in _markDirectPeerReady once identity is confirmed.
     unawaited(
@@ -2443,6 +2526,8 @@ class AirGridMeshService {
         KnownContact(
           nodeId: packet.senderNodeId,
           displayName: packet.senderName,
+          profileIconId: profileMeta.iconId,
+          profileStatus: profileMeta.status,
           publicKeyBase64: publicKeyB64,
           lastSeenAt: DateTime.now(),
         ),
@@ -2510,6 +2595,43 @@ class AirGridMeshService {
       } else {
         Future.delayed(Duration(milliseconds: delayMs), send);
       }
+    }
+  }
+
+  _KeyAnnounceProfileMeta _parseKeyAnnounceProfileMeta(String rawContent) {
+    if (rawContent.trim().isEmpty) {
+      return const _KeyAnnounceProfileMeta();
+    }
+
+    try {
+      final decoded = jsonDecode(rawContent);
+      if (decoded is! Map<String, dynamic>) {
+        return const _KeyAnnounceProfileMeta();
+      }
+
+      final iconRaw = decoded['profileIconId'];
+      final statusRaw = decoded['profileStatus'];
+
+      String? iconId;
+      String? status;
+
+      if (iconRaw is String) {
+        final trimmed = iconRaw.trim();
+        if (trimmed.isNotEmpty && trimmed.length <= 40) {
+          iconId = trimmed;
+        }
+      }
+
+      if (statusRaw is String) {
+        final trimmed = statusRaw.trim();
+        if (trimmed.isNotEmpty) {
+          status = trimmed.length > 80 ? trimmed.substring(0, 80) : trimmed;
+        }
+      }
+
+      return _KeyAnnounceProfileMeta(iconId: iconId, status: status);
+    } catch (_) {
+      return const _KeyAnnounceProfileMeta();
     }
   }
 

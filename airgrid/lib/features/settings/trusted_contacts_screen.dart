@@ -64,21 +64,46 @@ class TrustedContactsScreen extends ConsumerWidget {
                     nodeSnippet,
                     style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                   ),
-                  trailing: TextButton(
-                    onPressed: () async {
-                      await ref
-                          .read(chatControllerProvider.notifier)
-                          .untrustContact(contact.nodeId);
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Removed from invited friends'),
-                          duration: Duration(seconds: 2),
-                          behavior: SnackBarBehavior.floating,
+                  isThreeLine: true,
+                  trailing: SizedBox(
+                    width: 164,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Switch.adaptive(
+                          value: contact.walkieAlwaysOn,
+                          onChanged: (contact.isTrusted)
+                              ? (enabled) async {
+                                  await ref
+                                      .read(chatControllerProvider.notifier)
+                                      .setWalkieAlwaysOn(contact.nodeId, enabled);
+                                }
+                              : null,
                         ),
-                      );
-                    },
-                    child: const Text('Remove from invited friends'),
+                        TextButton(
+                          onPressed: () async {
+                            await ref
+                                .read(chatControllerProvider.notifier)
+                                .untrustContact(contact.nodeId);
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Removed from invited friends'),
+                                duration: Duration(seconds: 2),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          },
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text('Remove'),
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },

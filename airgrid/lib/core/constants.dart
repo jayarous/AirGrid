@@ -69,6 +69,15 @@ class AirGridConstants {
   /// Maximum duration for a valid voice note.
   static const Duration kPrivateVoiceNoteMaxDuration = Duration(seconds: 45);
 
+  /// Minimum duration for a walkie-talkie clip.
+  static const Duration kWalkieMinDuration = Duration(milliseconds: 350);
+
+  /// Maximum duration for a walkie-talkie clip to keep latency predictable.
+  static const Duration kWalkieMaxDuration = Duration(seconds: 15);
+
+  /// Maximum payload bytes for a walkie clip.
+  static const int kWalkieMaxBytes = 96 * 1024;
+
   // ── ChatController Constants ─────────────────────────────────────────────
 
   /// Debounce duration for message pruning in ChatController.

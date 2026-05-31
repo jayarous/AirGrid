@@ -24,6 +24,9 @@ import 'package:uuid/uuid.dart';
 class LocalIdentityStore {
   static const _keyNodeId = 'airgrid_node_id';
   static const _keyDisplayName = 'airgrid_display_name';
+  static const _keyProfileIconId = 'airgrid_profile_icon_id';
+  static const _keyProfileStatus = 'airgrid_profile_status';
+  static const _defaultProfileIconId = 'person';
   
   // Legacy SharedPreferences keys (for migration)
   static const _legacyPrivateKeyB64 = 'airgrid_private_key_b64';
@@ -140,6 +143,19 @@ class LocalIdentityStore {
   /// Display name chosen during onboarding, or null before onboarding.
   String? get displayName => _prefs.getString(_keyDisplayName);
 
+  /// Selected local profile icon ID.
+  String get profileIconId =>
+      _prefs.getString(_keyProfileIconId) ?? _defaultProfileIconId;
+
+  /// Optional profile status shown under the local display name.
+  String? get profileStatus {
+    final raw = _prefs.getString(_keyProfileStatus);
+    if (raw == null) return null;
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    return trimmed;
+  }
+
   /// True once the user has completed onboarding and saved a display name.
   bool get hasIdentity {
     final name = displayName;
@@ -161,4 +177,16 @@ class LocalIdentityStore {
 
   Future<void> saveDisplayName(String name) =>
       _prefs.setString(_keyDisplayName, name.trim());
+
+  Future<void> saveProfileIconId(String iconId) =>
+      _prefs.setString(_keyProfileIconId, iconId.trim());
+
+  Future<void> saveProfileStatus(String status) async {
+    final trimmed = status.trim();
+    if (trimmed.isEmpty) {
+      await _prefs.remove(_keyProfileStatus);
+      return;
+    }
+    await _prefs.setString(_keyProfileStatus, trimmed);
+  }
 }

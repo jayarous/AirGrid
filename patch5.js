@@ -1,0 +1,22 @@
+const fs = require('fs');
+let code = fs.readFileSync('airgrid/lib/features/home/home_screen.dart', 'utf8');
+
+code = code.replace(
+  'return Container(\n      padding: const EdgeInsets.all(14),\n      decoration: BoxDecoration(\n        color: cs.surfaceContainerLow,\n        borderRadius: BorderRadius.circular(14),\n        border: Border.all(color: cs.outlineVariant.withAlpha(90)),\n        boxShadow: [\n          BoxShadow(\n            color: Colors.black.withAlpha(8),\n            blurRadius: 6,\n            offset: const Offset(0, 3),\n          ),\n        ],\n      ),',
+  'return Container(\n      padding: const EdgeInsets.all(20),\n      decoration: BoxDecoration(\n        gradient: online ? LinearGradient(colors: [cs.primaryContainer.withAlpha(120), cs.surfaceContainerHigh.withAlpha(80)], begin: Alignment.topLeft, end: Alignment.bottomRight) : null,\n        color: online ? null : cs.surfaceContainerLow,\n        borderRadius: BorderRadius.circular(24),\n        border: Border.all(color: cs.outlineVariant.withAlpha(50)),\n        boxShadow: [\n          BoxShadow(\n            color: cs.shadow.withAlpha(8),\n            blurRadius: 16,\n            offset: const Offset(0, 4),\n          ),\n        ],\n      ),'
+);
+code = code.replace(
+  'width: 44,\n                height: 44,\n                decoration: BoxDecoration(\n                  color: online ? onlineIconBackground : cs.errorContainer,\n                  borderRadius: BorderRadius.circular(8),\n                ),',
+  'width: 52,\n                height: 52,\n                decoration: BoxDecoration(\n                  color: online ? onlineIconBackground : cs.errorContainer,\n                  borderRadius: BorderRadius.circular(16),\n                  boxShadow: online ? [BoxShadow(color: onlineIconColor.withAlpha(40), blurRadius: 10, offset: const Offset(0, 4))] : null,\n                ),'
+);
+code = code.replace('online ? Icons.hub : Icons.hub_outlined,', 'online ? Icons.hub_rounded : Icons.hub_outlined,');
+code = code.replace('color: online ? onlineIconColor : cs.onErrorContainer,\n                ),', 'color: online ? onlineIconColor : cs.onErrorContainer,\n                  size: 28,\n                ),');
+code = code.replace("'Mesh online' : 'Mesh offline',", "'Mesh Online' : 'Mesh Offline',");
+code = code.replace('style: Theme.of(context).textTheme.titleMedium?.copyWith(\n                        fontWeight: FontWeight.w700,\n                      ),', 'style: Theme.of(context).textTheme.titleLarge?.copyWith(\n                            fontWeight: FontWeight.w800,\n                            letterSpacing: -0.3,\n                          ),');
+code = code.replace('Container(\n                decoration: BoxDecoration(\n                  color: cs.surfaceContainerHighest,\n                  borderRadius: BorderRadius.circular(12),\n                ),', 'Material(\n                color: cs.surface,\n                shape: RoundedRectangleBorder(\n                  borderRadius: BorderRadius.circular(16),\n                  side: BorderSide(color: cs.outlineVariant.withAlpha(50)),\n                ),');
+code = code.replace('Icon(\n                          meshStarted ? Icons.power_settings_new : Icons.wifi,\n                        )', 'Icon(\n                          meshStarted ? Icons.power_settings_new_rounded : Icons.wifi_rounded,\n                          color: meshStarted ? cs.primary : cs.onSurfaceVariant,\n                        )');
+code = code.replace('child: ConstrainedBox(\n                  constraints: BoxConstraints(minWidth: constraints.maxWidth),\n                  child: Row(\n                    mainAxisAlignment: MainAxisAlignment.center,\n                    children: [\n                      _MetricChip(', 'child: ConstrainedBox(\n                  constraints: BoxConstraints(minWidth: constraints.maxWidth),\n                  child: Row(\n                    mainAxisAlignment: MainAxisAlignment.spaceBetween,\n                    children: [\n                      _MetricChip();
+code = code.replace('const SizedBox(width: 7),', 'const SizedBox(width: 8),');
+code = code.replace('const SizedBox(width: 7),', 'const SizedBox(width: 8),');
+
+fs.writeFileSync('airgrid/lib/features/home/home_screen.dart', code);

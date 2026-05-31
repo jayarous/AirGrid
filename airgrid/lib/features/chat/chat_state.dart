@@ -27,6 +27,37 @@ class ChatState {
   final List<KnownContact> knownContacts;
   final PrivacyMode privacyMode;
   final bool batteryOptimizationEnabled;
+  final bool showOnlineOnly;
+  final bool showClosedChats;
+  final bool showFriendsOnly;
+
+  /// Node ID currently selected for walkie-talkie quick actions.
+  final String? walkiePeerNodeId;
+
+  /// True while the user is actively holding the walkie transmit button.
+  final bool walkieIsTransmitting;
+
+  /// True while a captured walkie clip is being sent.
+  final bool walkieIsSending;
+
+  /// Last walkie-specific error shown to the user.
+  final String? walkieLastError;
+
+  /// Whether public walkie audio should keep playing while the user leaves
+  /// the walkie screen.
+  final bool publicWalkieStayOnline;
+
+  /// Session id for the current walkie invite or active handshake.
+  final String? walkieInviteSessionId;
+
+  /// Peer node id for the current walkie invite or active handshake.
+  final String? walkieInvitePeerNodeId;
+
+  /// True when the current invite was received rather than sent.
+  final bool walkieInviteIsIncoming;
+
+  /// Peer node id of the active walkie session, once accepted.
+  final String? walkieSessionActivePeerNodeId;
 
   /// Message IDs hidden by the local user this session. In-memory only.
   final Set<String> hiddenMessageIds;
@@ -52,6 +83,18 @@ class ChatState {
     this.knownContacts = const [],
     this.privacyMode = PrivacyMode.everyoneNearby,
     this.batteryOptimizationEnabled = true,
+    this.showOnlineOnly = false,
+    this.showClosedChats = false,
+    this.showFriendsOnly = false,
+    this.walkiePeerNodeId,
+    this.walkieIsTransmitting = false,
+    this.walkieIsSending = false,
+    this.walkieLastError,
+    this.publicWalkieStayOnline = false,
+    this.walkieInviteSessionId,
+    this.walkieInvitePeerNodeId,
+    this.walkieInviteIsIncoming = false,
+    this.walkieSessionActivePeerNodeId,
     this.hiddenMessageIds = const {},
   });
 
@@ -76,6 +119,18 @@ class ChatState {
       knownContacts = const [],
       privacyMode = PrivacyMode.everyoneNearby,
       batteryOptimizationEnabled = true,
+      showOnlineOnly = false,
+      showClosedChats = false,
+      showFriendsOnly = false,
+      walkiePeerNodeId = null,
+      walkieIsTransmitting = false,
+      walkieIsSending = false,
+      walkieLastError = null,
+      publicWalkieStayOnline = false,
+      walkieInviteSessionId = null,
+      walkieInvitePeerNodeId = null,
+      walkieInviteIsIncoming = false,
+      walkieSessionActivePeerNodeId = null,
       hiddenMessageIds = const {};
 
   /// Messages filtered to the currently selected conversation.
@@ -83,11 +138,13 @@ class ChatState {
     final blocked = blockedNodeIds;
     final hidden = hiddenMessageIds;
     final conv = selectedConversation;
+    bool isVisibleInChat(AirGridMessage m) => m.content != '[walkie]';
     if (conv is PublicConversation) {
       return messages
           .where(
             (m) =>
                 m.conversationType == 'public' &&
+                isVisibleInChat(m) &&
                 !blocked.contains(m.senderNodeId) &&
                 !hidden.contains(m.id),
           )
@@ -98,6 +155,7 @@ class ChatState {
             (m) =>
                 m.conversationType == 'private' &&
                 m.peerNodeId == conv.peerNodeId &&
+                isVisibleInChat(m) &&
                 !blocked.contains(m.senderNodeId) &&
                 (m.peerNodeId == null || !blocked.contains(m.peerNodeId)) &&
                 !hidden.contains(m.id),
@@ -116,6 +174,10 @@ class ChatState {
   /// Node IDs of all trusted contacts, for O(1) look-up.
   Set<String> get trustedNodeIds =>
       knownContacts.where((c) => c.isTrusted).map((c) => c.nodeId).toSet();
+
+    /// Node IDs of private chats the user closed locally.
+    Set<String> get closedChatNodeIds =>
+      knownContacts.where((c) => c.isChatClosed).map((c) => c.nodeId).toSet();
 
   ChatState copyWith({
     List<AirGridMessage>? messages,
@@ -138,9 +200,25 @@ class ChatState {
     List<KnownContact>? knownContacts,
     PrivacyMode? privacyMode,
     bool? batteryOptimizationEnabled,
+    bool? showOnlineOnly,
+    bool? showClosedChats,
+    bool? showFriendsOnly,
+    String? walkiePeerNodeId,
+    bool? walkieIsTransmitting,
+    bool? walkieIsSending,
+    String? walkieLastError,
+    bool? publicWalkieStayOnline,
+    String? walkieInviteSessionId,
+    String? walkieInvitePeerNodeId,
+    bool? walkieInviteIsIncoming,
+    String? walkieSessionActivePeerNodeId,
     Set<String>? hiddenMessageIds,
     bool clearLocalLocation = false,
     bool clearLocationStatus = false,
+    bool clearWalkiePeerNodeId = false,
+    bool clearWalkieLastError = false,
+    bool clearWalkieInvite = false,
+    bool clearWalkieSessionActivePeerNodeId = false,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
@@ -170,6 +248,32 @@ class ChatState {
       privacyMode: privacyMode ?? this.privacyMode,
       batteryOptimizationEnabled:
           batteryOptimizationEnabled ?? this.batteryOptimizationEnabled,
+      showOnlineOnly: showOnlineOnly ?? this.showOnlineOnly,
+      showClosedChats: showClosedChats ?? this.showClosedChats,
+      showFriendsOnly: showFriendsOnly ?? this.showFriendsOnly,
+      walkiePeerNodeId: clearWalkiePeerNodeId
+          ? null
+          : walkiePeerNodeId ?? this.walkiePeerNodeId,
+      walkieIsTransmitting: walkieIsTransmitting ?? this.walkieIsTransmitting,
+      walkieIsSending: walkieIsSending ?? this.walkieIsSending,
+      walkieLastError: clearWalkieLastError
+          ? null
+          : walkieLastError ?? this.walkieLastError,
+      publicWalkieStayOnline:
+          publicWalkieStayOnline ?? this.publicWalkieStayOnline,
+      walkieInviteSessionId: clearWalkieInvite
+          ? null
+          : walkieInviteSessionId ?? this.walkieInviteSessionId,
+      walkieInvitePeerNodeId: clearWalkieInvite
+          ? null
+          : walkieInvitePeerNodeId ?? this.walkieInvitePeerNodeId,
+      walkieInviteIsIncoming: clearWalkieInvite
+          ? false
+          : walkieInviteIsIncoming ?? this.walkieInviteIsIncoming,
+      walkieSessionActivePeerNodeId: clearWalkieSessionActivePeerNodeId
+          ? null
+          : walkieSessionActivePeerNodeId ??
+            this.walkieSessionActivePeerNodeId,
       hiddenMessageIds: hiddenMessageIds ?? this.hiddenMessageIds,
     );
   }

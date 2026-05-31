@@ -4,10 +4,11 @@ import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/battery_optimization_bridge.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
-import 'package:airgrid/core/validation.dart';
 import 'package:airgrid/domain/models/privacy_mode.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/nearby/nearby_preferences.dart';
+import 'package:airgrid/features/settings/profile_avatar_catalog.dart';
+import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,9 +25,6 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen>
     with WidgetsBindingObserver {
-  late final TextEditingController _nameController;
-  final _formKey = GlobalKey<FormState>();
-  bool _saving = false;
   bool _requestingPermissions = false;
   double _smoothingAlpha = nearbyDefaultSmoothingAlpha;
   SharedPreferences? _prefs;
@@ -38,8 +36,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    final identity = ref.read(localIdentityStoreProvider);
-    _nameController = TextEditingController(text: identity.displayName ?? '');
     _permissionsFuture = _loadPermissions();
     _playServicesFuture = _loadPlayServices();
     _packageInfoFuture = PackageInfo.fromPlatform();
@@ -55,7 +51,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _nameController.dispose();
     super.dispose();
   }
 
@@ -163,39 +158,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     await BatteryOptimizationBridge.openSystemBatteryOptimizationSettings();
   }
 
-  Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    final name = _nameController.text;
-    final validation = DisplayNameValidator.validateLocal(name);
-
-    if (!validation.isValid) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(validation.error!)));
-      return;
-    }
-
-    setState(() => _saving = true);
-    try {
-      final identity = ref.read(localIdentityStoreProvider);
-      // Save the sanitized value
-      await identity.saveDisplayName(validation.sanitizedValue!);
-
-      // Restart mesh with the new name if it was already running.
-      final controller = ref.read(chatControllerProvider.notifier);
-      final meshWasStarted = ref.read(chatControllerProvider).meshStarted;
-      if (meshWasStarted) {
-        await controller.stopMesh();
-        await controller.startMesh();
-      }
-
-      if (mounted) Navigator.of(context).pop();
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
   Future<void> _resolvePlayServices(PlayServicesStatus status) async {
     await ref.read(playServicesProvider).resolve(status);
     if (!mounted) return;
@@ -214,40 +176,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   @override
   Widget build(BuildContext context) {
     final identity = ref.read(localIdentityStoreProvider);
+    final isOnline = ref.watch(
+      chatControllerProvider.select((s) => s.meshStarted),
+    );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
-          children: [
-            TextFormField(
-              controller: _nameController,
-              maxLength: 40,
-              textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(
-                labelText: 'Display name',
-                helperText: 'Shown to nearby peers',
-                border: OutlineInputBorder(),
+      appBar: AppBar(
+        title: const Text('Settings'),
+        actions: const [PublicWalkieStatusIcon()],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
+        children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: ProfileAvatarBadge(
+                icon: ProfileAvatarCatalog.iconFor(identity.profileIconId),
+                isOnline: isOnline,
               ),
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) {
-                  return 'Name cannot be empty';
-                }
-                return null;
+              title: Text(identity.displayName?.trim().isNotEmpty == true ? identity.displayName!.trim() : 'Set your profile'),
+              subtitle: const Text('Display name and icon'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                await Navigator.of(context).pushNamed(AppRouter.profileEdit);
+                if (!mounted) return;
+                setState(() {});
               },
-            ),
-            const SizedBox(height: 8),
-            FilledButton(
-              onPressed: _saving ? null : _save,
-              child: _saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
             ),
             const Divider(height: 32),
             Text(
@@ -595,14 +549,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   ),
                 );
                 if (confirmed == true) {
-                  setState(() => _saving = true);
-                  try {
-                    await ref
-                        .read(chatControllerProvider.notifier)
-                        .clearAllChats();
-                  } finally {
-                    if (mounted) setState(() => _saving = false);
-                  }
+                  await ref.read(chatControllerProvider.notifier).clearAllChats();
                 }
               },
             ),
@@ -743,7 +690,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               },
             ),
           ],
-        ),
       ),
     );
   }
