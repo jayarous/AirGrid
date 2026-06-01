@@ -657,7 +657,11 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       );
 
       final result = peer != null
-          ? await controller.sendPrivateAudio(peer, payload)
+          ? await controller.sendPrivateAudio(
+              peer,
+              payload,
+              allowPlaintextFallback: true,
+            )
           : await _sendToKnownContact(
               conv.peerNodeId,
               payload,

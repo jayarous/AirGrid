@@ -11,7 +11,9 @@ import 'package:airgrid/data/transport/transport_codec.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/airgrid_packet.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
+import 'package:airgrid/domain/models/media_attachment.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
+import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/chat/walkie_session_controller.dart';
@@ -392,4 +394,71 @@ void main() {
     expect(state.walkieIsSending, isFalse);
     expect(state.walkieLastError, 'Alex ended the walkie session');
   });
+
+  test(
+    'private walkie audio can use direct fallback after accepted session',
+    () async {
+      final transport = FakeTransport();
+      final container = _container(
+        identity: await _identity(),
+        transport: transport,
+      );
+      addTearDown(container.dispose);
+
+      final controller = container.read(chatControllerProvider.notifier);
+      await controller.startMesh();
+      transport.connectPeer(
+        'endpoint-1',
+        name: 'Alex',
+        nodeId: _privatePeerNodeId,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final peer = MeshPeer(
+        endpointId: 'endpoint-1',
+        displayName: 'Alex',
+        connectedAt: DateTime.now(),
+        nodeId: _privatePeerNodeId,
+        encryptionReady: false,
+      );
+      expect(await controller.sendWalkieInvite(peer), isTrue);
+      final sessionId = container
+          .read(chatControllerProvider)
+          .walkieInviteSessionId;
+      expect(sessionId, isNotNull);
+      _receiveWalkieControl(
+        transport,
+        fromEndpointId: 'endpoint-1',
+        senderNodeId: _privatePeerNodeId,
+        senderName: 'Alex',
+        recipientNodeId: _localNodeId,
+        action: 'accept',
+        sessionId: sessionId!,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final result = await controller.sendPrivateAudio(
+        peer,
+        const AudioAttachmentPayload(
+          transferId: 'walkie-transfer-1',
+          mimeType: 'audio/m4a',
+          byteLength: 4,
+          durationMs: 1200,
+          source: AudioAttachmentPayload.sourceWalkie,
+          dataBase64: 'AQIDBA==',
+        ),
+        allowPlaintextFallback: true,
+      );
+
+      expect(result, PrivateSendResult.sentPlaintext);
+      final audioPackets = decodeSentPackets(
+        transport,
+      ).where((packet) => packet.packetType == 'audio').toList();
+      expect(audioPackets, hasLength(1));
+      expect(audioPackets.single.conversationType, 'private');
+      expect(audioPackets.single.recipientNodeId, _privatePeerNodeId);
+      expect(audioPackets.single.encryptionVersion, isNull);
+      expect(audioPackets.single.content, contains('"source":"walkie"'));
+    },
+  );
 }
