@@ -733,6 +733,193 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   static const Color _radioShell = Color(0xFF343A41);
   static const Color _radioShellDark = Color(0xFF1B1E24);
 
+  Widget _buildHardwareHeader({
+    required bool isPublicMode,
+    required int peerCount,
+    required bool isActive,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withAlpha(22)),
+        gradient: const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF3C434B), Color(0xFF20242B)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(80),
+            blurRadius: 14,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          _buildScrew(),
+          const SizedBox(width: 12),
+          Expanded(child: _buildSpeakerGrille()),
+          const SizedBox(width: 12),
+          _buildControlKnob(
+            label: 'VOL',
+            active: isActive,
+            valueLabel: isPublicMode ? 'PUB' : 'PRI',
+          ),
+          const SizedBox(width: 10),
+          _buildControlKnob(
+            label: 'SQL',
+            active: peerCount > 0,
+            valueLabel: peerCount.toString().padLeft(2, '0'),
+          ),
+          const SizedBox(width: 12),
+          _buildScrew(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpeakerGrille() {
+    return Container(
+      height: 58,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: const Color(0xFF171B21),
+        border: Border.all(color: Colors.black.withAlpha(120)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.white.withAlpha(12),
+            blurRadius: 1,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < 12; i++) ...[
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(99),
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withAlpha(190),
+                      const Color(0xFF2C333B),
+                      Colors.black.withAlpha(220),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            if (i != 11) const SizedBox(width: 5),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControlKnob({
+    required String label,
+    required bool active,
+    required String valueLabel,
+  }) {
+    final glow = active ? _radioAmber : Colors.white38;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const RadialGradient(
+              colors: [Color(0xFF505963), Color(0xFF1B2027)],
+            ),
+            border: Border.all(color: Colors.white.withAlpha(36), width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: glow.withAlpha(active ? 85 : 22),
+                blurRadius: active ? 10 : 4,
+                spreadRadius: active ? 1 : 0,
+              ),
+              BoxShadow(
+                color: Colors.black.withAlpha(95),
+                blurRadius: 7,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 6,
+                height: 23,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(99),
+                  color: glow,
+                ),
+              ),
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 7),
+                  child: Text(
+                    valueLabel,
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(180),
+                      fontSize: 8,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.white.withAlpha(150),
+            fontSize: 9,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.8,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildScrew() {
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const RadialGradient(
+          colors: [Color(0xFF66707A), Color(0xFF1B2026)],
+        ),
+        border: Border.all(color: Colors.black.withAlpha(140)),
+      ),
+      child: Center(
+        child: Container(
+          width: 12,
+          height: 2,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(99),
+            color: Colors.black.withAlpha(155),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildLatchingPushButton({
     required bool isOn,
     required bool enabled,
@@ -1711,6 +1898,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            _buildHardwareHeader(
+                              isPublicMode: _isPublicMode,
+                              peerCount: state.peers.length,
+                              isActive: isActiveSessionForTarget,
+                            ),
+                            SizedBox(height: sectionGap),
                             _buildChannelSelector(
                               isLocked: isHolding || isSending,
                               entries: channelEntries,
