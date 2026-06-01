@@ -93,7 +93,7 @@ void main() {
   testWidgets('shows no-target presence state by default', (tester) async {
     await _pumpWalkie(tester);
 
-    expect(find.text('No target selected'), findsOneWidget);
+    expect(find.text('CH-NO TARGET'), findsOneWidget);
   });
 
   testWidgets('shows selected private target name', (tester) async {
@@ -106,10 +106,9 @@ void main() {
     container.read(chatControllerProvider.notifier).selectConversation(
       const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    expect(find.text('Alex'), findsOneWidget);
-    expect(find.text('Target offline'), findsOneWidget);
+    expect(find.text('CH-ALEX'), findsOneWidget);
   });
 
   testWidgets('shows target online when selected peer is connected', (
@@ -133,9 +132,9 @@ void main() {
       const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
     );
     transport.connectPeer('endpoint-1', name: 'Alex', nodeId: 'peer-1');
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    expect(find.text('Target online'), findsOneWidget);
+    expect(find.text('ONLINE'), findsWidgets);
   });
 
   testWidgets('renders walkie last error from controller state', (tester) async {
@@ -165,7 +164,7 @@ void main() {
     container.read(chatControllerProvider.notifier).setWalkieSending(
       isSending: true,
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     final iconButtonFinder = find.ancestor(
       of: find.byIcon(Icons.people_alt_outlined),

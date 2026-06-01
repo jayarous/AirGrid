@@ -142,7 +142,7 @@ void main() {
     await _pumpWithProviders(tester, const HomeScreen(), unavailable);
 
     expect(find.text('Nearby is unavailable'), findsOneWidget);
-    expect(find.text('Mesh offline'), findsOneWidget);
+    expect(find.text('Mesh Offline'), findsOneWidget);
     expect(find.text('Mesh online'), findsNothing);
     expect(find.text('Offline'), findsOneWidget);
     expect(find.text('Idle'), findsOneWidget);

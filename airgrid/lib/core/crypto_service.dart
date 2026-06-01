@@ -1,7 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:airgrid/core/logger.dart';
 import 'package:cryptography/cryptography.dart';
-import 'package:flutter/foundation.dart';
 
 /// In-memory peer public-key cache and local encryption/decryption service.
 ///
@@ -46,18 +47,18 @@ class CryptoService {
     try {
       final bytes = base64Decode(base64PublicKey);
       if (bytes.length != 32) {
-        if (kDebugMode) {
-          debugPrint(
-            '[CRYPTO] Invalid key for $nodeId: expected 32 bytes, got ${bytes.length}',
-          );
-        }
+        AirGridLogger.log(
+          LogCategory.crypto,
+          'Ignored peer key with invalid length during cache update',
+        );
         return;
       }
       _keyCache[nodeId] = SimplePublicKey(bytes, type: KeyPairType.x25519);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[CRYPTO] Malformed key for $nodeId: $e');
-      }
+    } catch (_) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Ignored malformed peer key during cache update',
+      );
     }
   }
 
@@ -100,12 +101,11 @@ class CryptoService {
         ...secretBox.mac.bytes,
       ]);
       return base64Encode(combined);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[CRYPTO] Encryption failed for recipient $recipientNodeId: $e',
-        );
-      }
+    } catch (_) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Encryption failed for recipient due to cryptographic operation error',
+      );
       return null;
     }
   }
@@ -151,10 +151,11 @@ class CryptoService {
         secretKey: sharedSecret,
       );
       return utf8.decode(plainBytes);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[CRYPTO] Decryption failed: $e');
-      }
+    } catch (_) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Decryption failed due to invalid payload or key mismatch',
+      );
       return null;
     }
   }

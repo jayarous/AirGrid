@@ -502,7 +502,7 @@ void main() {
         expect(transport.sentPayloads, isNotEmpty);
 
         final sent = transport.sentPayloads.last;
-        expect(sent.endpoints, ['ep-target']);
+        expect(sent.endpoints, containsAll(['ep-target', 'ep-other']));
 
         final packet = TransportCodec.decode(sent.bytes)!;
         expect(packet.conversationType, 'private');

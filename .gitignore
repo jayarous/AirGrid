@@ -1,0 +1,9 @@
+# Repository-root local/sensitive artifacts
+release-signing/*.jks
+release-signing/*.keystore
+release-signing/*.p12
+
+# Temporary scratch files
+patch*.js
+patch*.dart
+test.txt

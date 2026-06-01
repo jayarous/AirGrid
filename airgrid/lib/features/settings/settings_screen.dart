@@ -83,18 +83,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             title: const Text('Nearby Visibility'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
-              children: PrivacyMode.values.map((mode) {
-                return RadioListTile<PrivacyMode>(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(mode.label),
-                  subtitle: Text(mode.description),
-                  value: mode,
-                  groupValue: selected,
-                  onChanged: (m) {
-                    if (m != null) setState(() => selected = m);
-                  },
-                );
-              }).toList(),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: PrivacyMode.values.map((mode) {
+                    return ChoiceChip(
+                      label: Text(mode.label),
+                      selected: selected == mode,
+                      onSelected: (isSelected) {
+                        if (isSelected) {
+                          setState(() => selected = mode);
+                        }
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 12),
+                Text(selected.description),
+              ],
             ),
             actions: [
               TextButton(
