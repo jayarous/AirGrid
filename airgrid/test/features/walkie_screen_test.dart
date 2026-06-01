@@ -94,6 +94,12 @@ void main() {
     await _pumpWalkie(tester);
 
     expect(find.text('CH-NO TARGET'), findsOneWidget);
+    expect(find.text('NO PRIVATE TARGET'), findsOneWidget);
+    expect(
+      find.text('Choose an online private peer before starting a session.'),
+      findsOneWidget,
+    );
+    expect(find.text('CHOOSE TARGET'), findsOneWidget);
   });
 
   testWidgets('shows selected private target name', (tester) async {
@@ -109,6 +115,9 @@ void main() {
     await tester.pump();
 
     expect(find.text('CH-ALEX'), findsOneWidget);
+    expect(find.text('TARGET OFFLINE'), findsOneWidget);
+    expect(find.text('Alex is not online yet.'), findsOneWidget);
+    expect(find.text('INVITE FIRST'), findsOneWidget);
   });
 
   testWidgets('shows target online when selected peer is connected', (
@@ -135,6 +144,8 @@ void main() {
     await tester.pump();
 
     expect(find.text('ONLINE'), findsWidgets);
+    expect(find.text('TARGET ONLINE'), findsOneWidget);
+    expect(find.text('Tap the link button to invite Alex.'), findsOneWidget);
   });
 
   testWidgets('renders walkie last error from controller state', (tester) async {
