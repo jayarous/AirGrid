@@ -645,6 +645,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       final online = await controller.waitForPeerOnline(
         conv.peerNodeId,
         timeout: const Duration(seconds: 8),
+        settleDelay: Duration.zero,
       );
       if (!online) {
         throw const _WalkieSendException('Peer is not online');
