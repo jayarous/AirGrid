@@ -395,6 +395,63 @@ void main() {
     expect(state.walkieLastError, 'Alex ended the walkie session');
   });
 
+  test('peer disconnect clears active private walkie session', () async {
+    final transport = FakeTransport();
+    final container = _container(
+      identity: await _identity(),
+      transport: transport,
+    );
+    addTearDown(container.dispose);
+
+    final controller = container.read(chatControllerProvider.notifier);
+    await controller.startMesh();
+    transport.connectPeer(
+      'endpoint-1',
+      name: 'Alex',
+      nodeId: _privatePeerNodeId,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final peer = MeshPeer(
+      endpointId: 'endpoint-1',
+      displayName: 'Alex',
+      connectedAt: DateTime.now(),
+      nodeId: _privatePeerNodeId,
+      encryptionReady: false,
+    );
+    expect(await controller.sendWalkieInvite(peer), isTrue);
+    final sessionId = container
+        .read(chatControllerProvider)
+        .walkieInviteSessionId;
+    expect(sessionId, isNotNull);
+    _receiveWalkieControl(
+      transport,
+      fromEndpointId: 'endpoint-1',
+      senderNodeId: _privatePeerNodeId,
+      senderName: 'Alex',
+      recipientNodeId: _localNodeId,
+      action: 'accept',
+      sessionId: sessionId!,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    controller.setWalkieTransmitting(
+      isTransmitting: true,
+      peerNodeId: _privatePeerNodeId,
+    );
+    controller.setWalkieSending(isSending: true);
+    transport.disconnectPeer('endpoint-1');
+    await Future<void>.delayed(Duration.zero);
+
+    final state = container.read(chatControllerProvider);
+    expect(state.peers, isEmpty);
+    expect(state.walkieSessionActivePeerNodeId, isNull);
+    expect(state.walkieInvitePeerNodeId, isNull);
+    expect(state.walkieIsTransmitting, isFalse);
+    expect(state.walkieIsSending, isFalse);
+    expect(state.walkieLastError, 'Private walkie peer disconnected');
+  });
+
   test(
     'private walkie audio can use direct fallback after accepted session',
     () async {

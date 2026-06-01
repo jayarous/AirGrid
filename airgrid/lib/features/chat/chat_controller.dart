@@ -235,7 +235,7 @@ class ChatController extends Notifier<ChatState> {
       ref.read(publicWalkieSettingsStoreProvider);
   BatterySettingsStore get _batteryStore =>
       ref.read(batterySettingsStoreProvider);
-    ChatListPreferencesStore get _chatListPrefs =>
+  ChatListPreferencesStore get _chatListPrefs =>
       ref.read(chatListPreferencesStoreProvider);
 
   Future<void> _loadBatteryOptimizationSetting() async {
@@ -567,11 +567,32 @@ class ChatController extends Notifier<ChatState> {
         final peerLocations = Map<String, PeerLocation>.from(
           state.peerLocations,
         )..removeWhere((nodeId, _) => !activeNodeIds.contains(nodeId));
+        final activeWalkiePeerId = state.walkieSessionActivePeerNodeId;
+        final inviteWalkiePeerId = state.walkieInvitePeerNodeId;
+        final activeWalkiePeerDisconnected =
+            activeWalkiePeerId != null &&
+            !activeNodeIds.contains(activeWalkiePeerId);
+        final inviteWalkiePeerDisconnected =
+            inviteWalkiePeerId != null &&
+            !activeNodeIds.contains(inviteWalkiePeerId);
+
         state = state.copyWith(
           peers: visiblePeers,
           peerLocations: peerLocations,
           lastEvent: '${visiblePeers.length} peer(s) connected',
           selectedConversation: selectedConversation,
+          clearWalkieSessionActivePeerNodeId: activeWalkiePeerDisconnected,
+          clearWalkieInvite:
+              activeWalkiePeerDisconnected || inviteWalkiePeerDisconnected,
+          walkieIsTransmitting: activeWalkiePeerDisconnected
+              ? false
+              : state.walkieIsTransmitting,
+          walkieIsSending: activeWalkiePeerDisconnected
+              ? false
+              : state.walkieIsSending,
+          walkieLastError: activeWalkiePeerDisconnected
+              ? 'Private walkie peer disconnected'
+              : state.walkieLastError,
         );
         final localLocation = state.localLocation;
         if (hasNewPeers &&
@@ -690,8 +711,7 @@ class ChatController extends Notifier<ChatState> {
     while (DateTime.now().isBefore(deadline)) {
       final peerReady = state.peers.any((peer) => peer.nodeId == nodeId);
       final contactReady = state.knownContacts.any(
-        (contact) =>
-            contact.nodeId == nodeId && contact.isDirectlyConnected,
+        (contact) => contact.nodeId == nodeId && contact.isDirectlyConnected,
       );
 
       if (peerReady || contactReady) {
@@ -708,8 +728,7 @@ class ChatController extends Notifier<ChatState> {
 
     return state.peers.any((peer) => peer.nodeId == nodeId) ||
         state.knownContacts.any(
-          (contact) =>
-              contact.nodeId == nodeId && contact.isDirectlyConnected,
+          (contact) => contact.nodeId == nodeId && contact.isDirectlyConnected,
         );
   }
 
@@ -972,13 +991,11 @@ class ChatController extends Notifier<ChatState> {
 
   Future<PrivateSendResult> sendPrivateImageToContact(
     KnownContact contact,
-    ImageAttachmentPayload image,
-    {
+    ImageAttachmentPayload image, {
     String? messageId,
     String? packetId,
     bool emitLocalMessage = true,
-  }
-  ) async {
+  }) async {
     try {
       return await _mesh.sendPrivateImageToContact(
         contact,
@@ -1016,13 +1033,11 @@ class ChatController extends Notifier<ChatState> {
 
   Future<PrivateSendResult> sendPrivateAudioToContact(
     KnownContact contact,
-    AudioAttachmentPayload audio,
-    {
+    AudioAttachmentPayload audio, {
     String? messageId,
     String? packetId,
     bool emitLocalMessage = true,
-  }
-  ) async {
+  }) async {
     try {
       return await _mesh.sendPrivateAudioToContact(
         contact,
@@ -1067,14 +1082,12 @@ class ChatController extends Notifier<ChatState> {
 
   Future<PrivateSendResult> sendPrivateFileToContact(
     KnownContact contact,
-    FileAttachmentPayload file,
-    {
-      String? messageId,
-      String? packetId,
-      bool emitLocalMessage = true,
-      void Function(double progress)? onProgress,
-    }
-  ) async {
+    FileAttachmentPayload file, {
+    String? messageId,
+    String? packetId,
+    bool emitLocalMessage = true,
+    void Function(double progress)? onProgress,
+  }) async {
     try {
       return await _mesh.sendPrivateFileToContact(
         contact,
@@ -1100,22 +1113,15 @@ class ChatController extends Notifier<ChatState> {
     }
 
     final clamped = progress.clamp(0.0, 1.0);
-    final updated = existing.copyWith(
-      mediaTransferProgress: clamped,
-    );
+    final updated = existing.copyWith(mediaTransferProgress: clamped);
     final newMessages = List<AirGridMessage>.from(state.messages)
       ..[idx] = updated;
     state = state.copyWith(messages: newMessages);
   }
 
-  Future<PrivateSendResult> retryImageMessage(
-    AirGridMessage message,
-  ) async {
+  Future<PrivateSendResult> retryImageMessage(AirGridMessage message) async {
     _cancelAutomaticImageRetry(message.id);
-    return _retryImageMessageInternal(
-      message,
-      markFailedOnTerminal: true,
-    );
+    return _retryImageMessageInternal(message, markFailedOnTerminal: true);
   }
 
   Future<PrivateSendResult> _retryImageMessageInternal(
@@ -1494,7 +1500,10 @@ class ChatController extends Notifier<ChatState> {
       ..removeAt(idx);
     final newHiddenIds = Set<String>.from(state.hiddenMessageIds)
       ..remove(messageId);
-    state = state.copyWith(messages: newMessages, hiddenMessageIds: newHiddenIds);
+    state = state.copyWith(
+      messages: newMessages,
+      hiddenMessageIds: newHiddenIds,
+    );
 
     if (!deleteTempFile) return;
     if (mediaTempPath == null || mediaTempPath.isEmpty) return;
@@ -1668,8 +1677,9 @@ class ChatController extends Notifier<ChatState> {
     if (!existing.isLocal || existing.conversationType != 'private') return;
     final updated = existing.copyWith(
       deliveryStatus: newStatus,
-      mediaTransferProgress:
-          newStatus == DeliveryStatus.pending ? existing.mediaTransferProgress : null,
+      mediaTransferProgress: newStatus == DeliveryStatus.pending
+          ? existing.mediaTransferProgress
+          : null,
     );
     final newMessages = List<AirGridMessage>.from(state.messages)
       ..[idx] = updated;
@@ -1706,7 +1716,9 @@ class ChatController extends Notifier<ChatState> {
   ) async {
     final tempPath = message.mediaTempPath;
     Uint8List bytes;
-    if (tempPath != null && tempPath.isNotEmpty && File(tempPath).existsSync()) {
+    if (tempPath != null &&
+        tempPath.isNotEmpty &&
+        File(tempPath).existsSync()) {
       try {
         bytes = await File(tempPath).readAsBytes();
       } catch (_) {

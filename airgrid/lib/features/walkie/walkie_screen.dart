@@ -655,19 +655,15 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         (item) => item?.nodeId == conv.peerNodeId,
         orElse: () => null,
       );
+      if (peer == null) {
+        throw const _WalkieSendException('Peer is not online');
+      }
 
-      final result = peer != null
-          ? await controller.sendPrivateAudio(
-              peer,
-              payload,
-              allowPlaintextFallback: true,
-            )
-          : await _sendToKnownContact(
-              conv.peerNodeId,
-              payload,
-              refreshedState.knownContacts,
-              controller,
-            );
+      final result = await controller.sendPrivateAudio(
+        peer,
+        payload,
+        allowPlaintextFallback: true,
+      );
 
       final sent =
           result == PrivateSendResult.sentEncrypted ||
@@ -709,22 +705,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         _status = 'Failed to send';
       });
     }
-  }
-
-  Future<PrivateSendResult> _sendToKnownContact(
-    String nodeId,
-    AudioAttachmentPayload payload,
-    List<KnownContact> contacts,
-    ChatController controller,
-  ) async {
-    final contact = contacts.cast<KnownContact?>().firstWhere(
-      (item) => item?.nodeId == nodeId,
-      orElse: () => null,
-    );
-    if (contact == null) {
-      return PrivateSendResult.peerUnavailable;
-    }
-    return controller.sendPrivateAudioToContact(contact, payload);
   }
 
   String _formatDuration(Duration duration) {
