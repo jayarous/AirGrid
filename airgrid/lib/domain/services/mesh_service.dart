@@ -23,6 +23,7 @@ import 'package:airgrid/domain/models/media_attachment.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/models/peer_location.dart';
 import 'package:airgrid/domain/models/privacy_mode.dart';
+import 'package:airgrid/domain/services/private_receipt_controller.dart';
 import 'package:airgrid/domain/services/relay_controller.dart';
 import 'package:airgrid/domain/services/transport_service.dart';
 import 'package:uuid/uuid.dart';
@@ -175,6 +176,8 @@ class AirGridMeshService {
   /// Per-peer read receipt batch rate limiters.
   late final PerPeerRateLimiterMap _receiptBatchLimiters;
 
+  late final PrivateReceiptController _privateReceiptController;
+
   /// Periodically retries queued encrypted private packets.
   late final Timer _spoolRetryTimer;
 
@@ -223,6 +226,38 @@ class AirGridMeshService {
     _spoolRetryTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       unawaited(_flushAllSpooled());
     });
+
+    _privateReceiptController = PrivateReceiptController(
+      identity: _identity,
+      cryptoService: _cryptoService,
+      lookupDirectEndpoint: (recipientNodeId) => _endpointToNodeId.entries
+          .where((e) => e.value == recipientNodeId)
+          .map((e) => e.key)
+          .firstOrNull,
+      connectedEndpoints: () => _transport.connectedEndpoints.toList(),
+      spoolControl: _spoolPacket,
+      sendEncryptedControl: (packet, targets) async {
+        for (final outgoing in PacketFragmenter.fragment(packet)) {
+          await _transport.sendToEndpoints(
+            targets,
+            TransportCodec.encode(outgoing),
+          );
+        }
+      },
+      sendPlainControl: (packet, targetEndpointId) {
+        return _transport.sendToEndpoints(
+          [targetEndpointId],
+          TransportCodec.encode(packet),
+        );
+      },
+      resolveReceiptAlias: (receiptMessageId) =>
+          _receiptMessageAliases[receiptMessageId] ?? receiptMessageId,
+      emitStatusUpdate: (messageId, status) {
+        _statusController.add((messageId: messageId, status: status));
+      },
+      allowReadReceiptBatch: _receiptBatchLimiters.allow,
+      readReceiptRetryAfter: _receiptBatchLimiters.retryAfter,
+    );
   }
 
   bool _shouldAcceptFromNode(String senderNodeId) {
@@ -1741,7 +1776,7 @@ class AirGridMeshService {
         packet.packetType == 'read_receipt') {
       if (packet.conversationType == 'private' &&
           packet.recipientNodeId == localNodeId) {
-        await _handleReceipt(packet);
+        await _privateReceiptController.handleReceipt(packet);
       }
       return;
     }
@@ -2635,86 +2670,6 @@ class AirGridMeshService {
     }
   }
 
-  Future<AirGridPacket> _buildReceiptPacket({
-    required String packetType,
-    required String recipientNodeId,
-    required String receiptMessageId,
-  }) async {
-    final localNodeId = _identity.nodeId;
-    final senderPublicKey = _identity.publicKeyBase64;
-    var content = '';
-    int? encryptionVersion;
-    String? wireReceiptMessageId = receiptMessageId;
-    var hopLimit = 1;
-
-    if (senderPublicKey != null && _cryptoService.hasKey(recipientNodeId)) {
-      final cipher = await _cryptoService.encryptContent(
-        receiptMessageId,
-        recipientNodeId,
-      );
-      if (cipher != null) {
-        content = cipher;
-        encryptionVersion = 1;
-        wireReceiptMessageId = null;
-        hopLimit = AirGridConstants.kHopLimit;
-      }
-    }
-
-    return AirGridPacket(
-      messageId: const Uuid().v4(),
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: content,
-      seenByNodes: [localNodeId],
-      hopLimit: hopLimit,
-      packetType: packetType,
-      senderPublicKey: encryptionVersion != null ? senderPublicKey : null,
-      encryptionVersion: encryptionVersion,
-      conversationType: 'private',
-      recipientNodeId: recipientNodeId,
-      receiptMessageId: wireReceiptMessageId,
-    );
-  }
-
-  Future<void> _sendPrivateControlPacket(
-    AirGridPacket packet, {
-    String? preferredEndpointId,
-  }) async {
-    final rid = packet.recipientNodeId;
-    if (rid == null) return;
-
-    final directEndpoint = _endpointToNodeId.entries
-        .where((e) => e.value == rid)
-        .map((e) => e.key)
-        .firstOrNull;
-
-    if (packet.encryptionVersion != null) {
-      final targets = directEndpoint != null
-          ? <String>[directEndpoint]
-          : _transport.connectedEndpoints.toList();
-
-      if (targets.isEmpty) {
-        _spoolPacket(packet);
-        return;
-      }
-
-      for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints(
-          targets,
-          TransportCodec.encode(outgoing),
-        );
-      }
-      return;
-    }
-
-    final plaintextTarget = directEndpoint ?? preferredEndpointId;
-    if (plaintextTarget == null) return;
-    await _transport.sendToEndpoints([
-      plaintextTarget,
-    ], TransportCodec.encode(packet));
-  }
-
   /// Sends [read_receipt] packets to [peerNodeId] for each of [messageIds].
   ///
   /// Called when the user opens a private conversation. Best-effort;
@@ -2723,79 +2678,7 @@ class AirGridMeshService {
     String peerNodeId,
     List<String> messageIds,
   ) async {
-    if (messageIds.isEmpty) return;
-
-    // Rate limit read receipt batches per peer
-    if (!_receiptBatchLimiters.allow(peerNodeId)) {
-      final retryAfter = _receiptBatchLimiters.retryAfter(peerNodeId);
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Read receipt batch to $peerNodeId rate limited '
-        '(retry after ${retryAfter.inMilliseconds}ms)',
-      );
-      return;
-    }
-
-    final directEndpointId = _endpointToNodeId.entries
-        .where((e) => e.value == peerNodeId)
-        .map((e) => e.key)
-        .firstOrNull;
-
-    for (final msgId in messageIds) {
-      final receipt = await _buildReceiptPacket(
-        packetType: 'read_receipt',
-        recipientNodeId: peerNodeId,
-        receiptMessageId: msgId,
-      );
-      try {
-        await _sendPrivateControlPacket(
-          receipt,
-          preferredEndpointId: directEndpointId,
-        );
-      } catch (_) {
-        // best effort
-      }
-    }
-    AirGridLogger.log(
-      LogCategory.routing,
-      'Sent ${messageIds.length} read receipt(s) to $peerNodeId',
-    );
-  }
-
-  Future<void> _handleReceipt(AirGridPacket packet) async {
-    var receiptMessageId = packet.receiptMessageId;
-    if (packet.encryptionVersion != null) {
-      if (packet.encryptionVersion != 1 || packet.senderPublicKey == null) {
-        AirGridLogger.log(
-          LogCategory.validation,
-          'Encrypted receipt ${packet.messageId} missing supported metadata',
-        );
-        return;
-      }
-      receiptMessageId = await _cryptoService.decryptContent(
-        packet.content,
-        packet.senderPublicKey!,
-      );
-    }
-
-    if (receiptMessageId == null) {
-      AirGridLogger.log(
-        LogCategory.validation,
-        'Receipt packet missing receiptMessageId - dropped',
-      );
-      return;
-    }
-    final canonicalMessageId =
-        _receiptMessageAliases[receiptMessageId] ?? receiptMessageId;
-    final status = packet.packetType == 'read_receipt'
-        ? DeliveryStatus.read
-        : DeliveryStatus.delivered;
-    _statusController.add((messageId: canonicalMessageId, status: status));
-    AirGridLogger.log(
-      LogCategory.routing,
-      'Receipt ${packet.packetType} for $canonicalMessageId '
-      'from ${packet.senderName}',
-    );
+    await _privateReceiptController.sendReadReceipts(peerNodeId, messageIds);
   }
 
   void _rememberReceiptAlias(String packetMessageId, String? localMessageId) {
@@ -2814,30 +2697,9 @@ class AirGridMeshService {
     String fromEndpointId,
   ) async {
     if (!_peers.containsKey(fromEndpointId)) return;
-    final originalSenderPublicKey = originalPacket.senderPublicKey;
-    if (originalSenderPublicKey != null) {
-      _cryptoService.cacheKey(
-        originalPacket.senderNodeId,
-        originalSenderPublicKey,
-      );
-    }
-    final receipt = await _buildReceiptPacket(
-      packetType: 'delivery_receipt',
-      recipientNodeId: originalPacket.senderNodeId,
-      receiptMessageId: originalPacket.messageId,
+    await _privateReceiptController.sendDeliveryReceipt(
+      originalPacket,
+      fromEndpointId,
     );
-    try {
-      await _sendPrivateControlPacket(
-        receipt,
-        preferredEndpointId: fromEndpointId,
-      );
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Sent delivery_receipt for ${originalPacket.messageId} '
-        'to $fromEndpointId',
-      );
-    } catch (_) {
-      // best effort
-    }
   }
 }
