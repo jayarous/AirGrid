@@ -58,6 +58,8 @@
     <!-- ── Foreground service ─────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <application
         android:label="AirGrid"
@@ -87,7 +89,7 @@
              apps using Nearby Connections. Background behavior is best-effort. -->
         <service
             android:name=".NearbyForegroundService"
-            android:foregroundServiceType="connectedDevice"
+            android:foregroundServiceType="connectedDevice|microphone|mediaPlayback"
             android:exported="false" />
 
         <!-- Don't delete the meta-data below.

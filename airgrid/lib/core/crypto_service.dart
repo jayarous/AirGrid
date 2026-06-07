@@ -16,6 +16,7 @@ class CryptoService {
   static final _chacha = Chacha20.poly1305Aead();
 
   final Map<String, SimplePublicKey> _keyCache = {};
+  final Map<String, Future<SecretKey>> _sharedSecretCache = {};
   SimpleKeyPairData? _localKeyPair;
 
   // ── Local keypair ────────────────────────────────────────────────────────
@@ -54,6 +55,7 @@ class CryptoService {
         return;
       }
       _keyCache[nodeId] = SimplePublicKey(bytes, type: KeyPairType.x25519);
+      _sharedSecretCache.remove(nodeId);
     } catch (_) {
       AirGridLogger.log(
         LogCategory.crypto,
@@ -71,6 +73,17 @@ class CryptoService {
   /// All node IDs for which a public key is cached.
   Set<String> get knownNodeIds => Set.unmodifiable(_keyCache.keys);
 
+  Future<SecretKey?> _sharedSecretFor(String nodeId) async {
+    final localKp = _localKeyPair;
+    final theirKey = _keyCache[nodeId];
+    if (localKp == null || theirKey == null) return null;
+    return _sharedSecretCache.putIfAbsent(
+      nodeId,
+      () =>
+          _x25519.sharedSecretKey(keyPair: localKp, remotePublicKey: theirKey),
+    );
+  }
+
   // ── Encryption ───────────────────────────────────────────────────────────
 
   /// Encrypts [plaintext] for [recipientNodeId] using the local keypair and
@@ -82,17 +95,22 @@ class CryptoService {
     String plaintext,
     String recipientNodeId,
   ) async {
-    final localKp = _localKeyPair;
-    final theirKey = _keyCache[recipientNodeId];
-    if (localKp == null || theirKey == null) return null;
+    return encryptBytes(
+      Uint8List.fromList(utf8.encode(plaintext)),
+      recipientNodeId,
+    );
+  }
+
+  Future<String?> encryptBytes(
+    Uint8List plaintext,
+    String recipientNodeId,
+  ) async {
+    final sharedSecret = await _sharedSecretFor(recipientNodeId);
+    if (sharedSecret == null) return null;
 
     try {
-      final sharedSecret = await _x25519.sharedSecretKey(
-        keyPair: localKp,
-        remotePublicKey: theirKey,
-      );
       final secretBox = await _chacha.encrypt(
-        utf8.encode(plaintext),
+        plaintext,
         secretKey: sharedSecret,
       );
       final combined = Uint8List.fromList([
@@ -118,6 +136,19 @@ class CryptoService {
   /// Returns the plaintext string, or null if decryption fails for any reason
   /// (wrong key, truncated payload, authentication failure, etc.).
   Future<String?> decryptContent(
+    String encryptedB64,
+    String senderPublicKeyB64,
+  ) async {
+    final plainBytes = await decryptBytes(encryptedB64, senderPublicKeyB64);
+    if (plainBytes == null) return null;
+    try {
+      return utf8.decode(plainBytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Uint8List?> decryptBytes(
     String encryptedB64,
     String senderPublicKeyB64,
   ) async {
@@ -150,7 +181,7 @@ class CryptoService {
         secretBox,
         secretKey: sharedSecret,
       );
-      return utf8.decode(plainBytes);
+      return Uint8List.fromList(plainBytes);
     } catch (_) {
       AirGridLogger.log(
         LogCategory.crypto,

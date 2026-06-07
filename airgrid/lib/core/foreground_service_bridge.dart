@@ -14,9 +14,17 @@ import 'logger.dart';
 /// stays platform-agnostic.
 abstract interface class MeshForegroundService {
   Stream<void> get exitRequests;
+  Stream<void> get riderMuteRequests;
+  Stream<void> get riderEndRequests;
   Future<void> startMeshService();
+  Future<void> startRiderService({
+    required String peerName,
+    required bool muted,
+  });
+  Future<void> updateRiderServiceMuted(bool muted);
   Future<bool> consumePendingExitAction();
   Future<void> showPrivateMessageNotification(String senderName);
+  Future<void> stopRiderService();
   Future<void> stopMeshService();
 }
 
@@ -25,6 +33,8 @@ class ForegroundServiceBridge implements MeshForegroundService {
 
   static const _channel = MethodChannel('com.airgrid/foreground');
   static final _exitController = StreamController<void>.broadcast();
+  static final _riderMuteController = StreamController<void>.broadcast();
+  static final _riderEndController = StreamController<void>.broadcast();
   static bool _handlerInstalled = false;
 
   static Stream<void> get staticExitRequests {
@@ -40,6 +50,12 @@ class ForegroundServiceBridge implements MeshForegroundService {
         _exitController.add(null);
         await _channel.invokeMethod<void>('ackExitAction');
       }
+      if (call.method == 'riderMute') {
+        _riderMuteController.add(null);
+      }
+      if (call.method == 'riderEnd') {
+        _riderEndController.add(null);
+      }
     });
   }
 
@@ -47,7 +63,29 @@ class ForegroundServiceBridge implements MeshForegroundService {
   Stream<void> get exitRequests => staticExitRequests;
 
   @override
+  Stream<void> get riderMuteRequests {
+    _ensureHandlerInstalled();
+    return _riderMuteController.stream;
+  }
+
+  @override
+  Stream<void> get riderEndRequests {
+    _ensureHandlerInstalled();
+    return _riderEndController.stream;
+  }
+
+  @override
   Future<void> startMeshService() => startMeshServiceStatic();
+
+  @override
+  Future<void> startRiderService({
+    required String peerName,
+    required bool muted,
+  }) => startRiderServiceStatic(peerName: peerName, muted: muted);
+
+  @override
+  Future<void> updateRiderServiceMuted(bool muted) =>
+      updateRiderServiceMutedStatic(muted);
 
   @override
   Future<bool> consumePendingExitAction() => consumePendingExitActionStatic();
@@ -55,6 +93,9 @@ class ForegroundServiceBridge implements MeshForegroundService {
   @override
   Future<void> showPrivateMessageNotification(String senderName) =>
       showPrivateMessageNotificationStatic(senderName);
+
+  @override
+  Future<void> stopRiderService() => stopRiderServiceStatic();
 
   @override
   Future<void> stopMeshService() => stopMeshServiceStatic();
@@ -69,6 +110,40 @@ class ForegroundServiceBridge implements MeshForegroundService {
       AirGridLogger.log(
         LogCategory.connection,
         'Failed to start foreground service: ${e.message}',
+      );
+    }
+  }
+
+  static Future<void> startRiderServiceStatic({
+    required String peerName,
+    required bool muted,
+  }) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    _ensureHandlerInstalled();
+    try {
+      await _channel.invokeMethod<void>('startRiderService', {
+        'peerName': peerName,
+        'muted': muted,
+      });
+      AirGridLogger.log(LogCategory.connection, 'Rider service started');
+    } on PlatformException catch (e) {
+      AirGridLogger.log(
+        LogCategory.connection,
+        'Failed to start Rider service: ${e.message}',
+      );
+    }
+  }
+
+  static Future<void> updateRiderServiceMutedStatic(bool muted) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('updateRiderServiceMuted', {
+        'muted': muted,
+      });
+    } on PlatformException catch (e) {
+      AirGridLogger.log(
+        LogCategory.connection,
+        'Failed to update Rider service: ${e.message}',
       );
     }
   }
@@ -113,6 +188,19 @@ class ForegroundServiceBridge implements MeshForegroundService {
       AirGridLogger.log(
         LogCategory.connection,
         'Failed to stop foreground service: ${e.message}',
+      );
+    }
+  }
+
+  static Future<void> stopRiderServiceStatic() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('stopRiderService');
+      AirGridLogger.log(LogCategory.connection, 'Rider service stopped');
+    } on PlatformException catch (e) {
+      AirGridLogger.log(
+        LogCategory.connection,
+        'Failed to stop Rider service: ${e.message}',
       );
     }
   }

@@ -43,6 +43,12 @@ class KnownContact {
   /// (e.g. they are on the private walkie screen or have an availability flag).
   final bool remoteWalkieAvailable;
 
+  /// Whether the remote peer advertises Rider Mode capability.
+  final bool riderSupported;
+
+  /// Whether the remote peer is currently armed for Rider Mode auto-join.
+  final bool riderArmed;
+
   /// Whether this private chat is hidden from the default conversation list.
   ///
   /// Closing is local-only and does not remove message history.
@@ -60,6 +66,8 @@ class KnownContact {
     this.isTrusted = false,
     this.walkieAlwaysOn = false,
     this.remoteWalkieAvailable = false,
+    this.riderSupported = false,
+    this.riderArmed = false,
     this.isChatClosed = false,
   });
 
@@ -78,6 +86,8 @@ class KnownContact {
     bool? isTrusted,
     bool? walkieAlwaysOn,
     bool? remoteWalkieAvailable,
+    bool? riderSupported,
+    bool? riderArmed,
     bool? isChatClosed,
   }) {
     return KnownContact(
@@ -93,7 +103,10 @@ class KnownContact {
       isBlocked: isBlocked ?? this.isBlocked,
       isTrusted: isTrusted ?? this.isTrusted,
       walkieAlwaysOn: walkieAlwaysOn ?? this.walkieAlwaysOn,
-      remoteWalkieAvailable: remoteWalkieAvailable ?? this.remoteWalkieAvailable,
+      remoteWalkieAvailable:
+          remoteWalkieAvailable ?? this.remoteWalkieAvailable,
+      riderSupported: riderSupported ?? this.riderSupported,
+      riderArmed: riderArmed ?? this.riderArmed,
       isChatClosed: isChatClosed ?? this.isChatClosed,
     );
   }
@@ -111,6 +124,8 @@ class KnownContact {
     'isTrusted': isTrusted,
     'walkieAlwaysOn': walkieAlwaysOn,
     'remoteWalkieAvailable': remoteWalkieAvailable,
+    'riderSupported': riderSupported,
+    'riderArmed': riderArmed,
     'isChatClosed': isChatClosed,
   };
 
@@ -125,6 +140,8 @@ class KnownContact {
     isTrusted: json['isTrusted'] as bool? ?? false,
     walkieAlwaysOn: json['walkieAlwaysOn'] as bool? ?? false,
     remoteWalkieAvailable: json['remoteWalkieAvailable'] as bool? ?? false,
+    riderSupported: json['riderSupported'] as bool? ?? false,
+    riderArmed: json['riderArmed'] as bool? ?? false,
     isChatClosed: json['isChatClosed'] as bool? ?? false,
   );
 

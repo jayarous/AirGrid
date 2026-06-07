@@ -5,7 +5,6 @@ import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_state.dart';
-import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:uuid/uuid.dart';
 
 const _walkieControlKind = 'walkie_control';
@@ -138,10 +137,6 @@ class WalkieSessionController {
 
     _writeState(
       _readState().copyWith(
-        selectedConversation: PrivateConversation(
-          peerNodeId: invitePeerId,
-          peerName: peer.displayName,
-        ),
         walkieSessionActivePeerNodeId: invitePeerId,
         walkiePeerNodeId: invitePeerId,
         clearWalkieInvite: true,
@@ -279,10 +274,6 @@ class WalkieSessionController {
           state.copyWith(
             walkieSessionActivePeerNodeId: peerNodeId,
             walkiePeerNodeId: peerNodeId,
-            selectedConversation: PrivateConversation(
-              peerNodeId: peerNodeId,
-              peerName: msg.peerName ?? msg.senderName,
-            ),
             clearWalkieInvite: true,
             clearWalkieLastError: true,
           ),

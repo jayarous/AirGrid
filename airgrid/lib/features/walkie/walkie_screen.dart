@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/constants.dart';
+import 'package:airgrid/data/storage/rider_mode_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/domain/models/media_attachment.dart';
@@ -13,6 +14,7 @@ import 'package:airgrid/domain/models/privacy_mode.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
+import 'package:airgrid/features/rider/rider_mode_controller.dart';
 import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -51,6 +53,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   /// When true the user is in open public-channel broadcast mode.
   /// When false (default) the private invite/session flow is active.
   bool _isPublicMode = false;
+  bool _isRiderMode = false;
 
   @override
   void initState() {
@@ -74,31 +77,45 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         ref.read(chatControllerProvider.notifier).startMesh();
       }
       // Announce initial walkie availability for this screen (best-effort).
-      unawaited(ref
-          .read(chatControllerProvider.notifier)
-          .publishWalkieAvailability(!_isPublicMode));
+      unawaited(
+        ref
+            .read(chatControllerProvider.notifier)
+            .publishWalkieAvailability(!_isPublicMode),
+      );
     });
   }
 
   @override
   void dispose() {
     // Publish offline only when private stay-online is not latched.
-    final state = ref.read(chatControllerProvider);
-    final targetNodeId = _currentTargetNodeId();
-    final keepAvailable =
-        !_isPublicMode &&
-        targetNodeId != null &&
-        state.knownContacts.any(
-          (contact) =>
-              contact.nodeId == targetNodeId &&
-              contact.isTrusted &&
-              contact.walkieAlwaysOn,
+    try {
+      final state = ref.read(chatControllerProvider);
+      final selected = state.selectedConversation;
+      final targetNodeId = selected is PrivateConversation
+          ? selected.peerNodeId
+          : state.walkiePeerNodeId;
+      final keepAvailable =
+          !_isPublicMode &&
+          targetNodeId != null &&
+          state.knownContacts.any(
+            (contact) =>
+                contact.nodeId == targetNodeId &&
+                contact.isTrusted &&
+                contact.walkieAlwaysOn,
+          );
+      unawaited(
+        ref
+            .read(chatControllerProvider.notifier)
+            .publishWalkieAvailability(keepAvailable),
+      );
+      if (_isRiderMode) {
+        unawaited(
+          ref.read(riderModeControllerProvider.notifier).armPresence(false),
         );
-    unawaited(
-      ref
-          .read(chatControllerProvider.notifier)
-          .publishWalkieAvailability(keepAvailable),
-    );
+      }
+    } catch (_) {
+      // Provider scopes may already be tearing down in widget tests/navigation.
+    }
     _channelDetentFlashTimer?.cancel();
     _ticker?.cancel();
     unawaited(_incomingPlayer?.dispose() ?? Future<void>.value());
@@ -406,6 +423,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         orElse: () => null,
       );
       if (selectedPeer == null) return;
+      if (_isRiderMode) {
+        ref.read(chatControllerProvider.notifier).setWalkiePeerNodeId(peerNodeId);
+        return;
+      }
       await _invitePeer(selectedPeer);
       return;
     }
@@ -416,21 +437,26 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
     if (selectedPeer == null) return;
 
-    ref
-        .read(chatControllerProvider.notifier)
-        .selectConversation(
-          PrivateConversation(
-            peerNodeId: selectedNodeId,
-            peerName: selectedPeer.displayName,
-          ),
-        );
+    final controller = ref.read(chatControllerProvider.notifier);
+    if (_isRiderMode) {
+      controller.setWalkiePeerNodeId(selectedNodeId);
+    } else {
+      controller.selectConversation(
+        PrivateConversation(
+          peerNodeId: selectedNodeId,
+          peerName: selectedPeer.displayName,
+        ),
+      );
+    }
 
-    await _autoStartPrivateWalkieIfEnabled(
-      PrivateConversation(
-        peerNodeId: selectedNodeId,
-        peerName: selectedPeer.displayName,
-      ),
-    );
+    if (!_isRiderMode) {
+      await _autoStartPrivateWalkieIfEnabled(
+        PrivateConversation(
+          peerNodeId: selectedNodeId,
+          peerName: selectedPeer.displayName,
+        ),
+      );
+    }
   }
 
   Future<String?> _showChooseTargetSheet(List<MeshPeer> candidates) {
@@ -459,7 +485,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                 children: [
                   Expanded(
                     child: Text(
-                      'Choose walkie target',
+                      _isRiderMode ? 'Choose rider' : 'Choose walkie target',
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w800,
                       ),
@@ -474,7 +500,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
               ),
               const SizedBox(height: 4),
               Text(
-                'Pick an online AirGrid peer to invite for a private walkie session.',
+                _isRiderMode
+                    ? 'Pick an online AirGrid peer for Rider Mode.'
+                    : 'Pick an online AirGrid peer to invite for a private walkie session.',
                 style: Theme.of(
                   context,
                 ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
@@ -540,22 +568,24 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFFF4D35E),
-                                  foregroundColor: Colors.black,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
+                              if (!_isRiderMode) ...[
+                                const SizedBox(width: 12),
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFF4D35E),
+                                    foregroundColor: Colors.black,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    elevation: 0,
+                                    minimumSize: const Size(72, 36),
                                   ),
-                                  elevation: 0,
-                                  minimumSize: const Size(72, 36),
+                                  onPressed: () => Navigator.of(
+                                    ctx,
+                                  ).pop('invite:${peer.nodeId}'),
+                                  child: const Text('Invite'),
                                 ),
-                                onPressed: () => Navigator.of(
-                                  ctx,
-                                ).pop('invite:${peer.nodeId}'),
-                                child: const Text('Invite'),
-                              ),
+                              ],
                             ],
                           ),
                         ),
@@ -906,10 +936,15 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF0F1724),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
             title: Text(
               'Receiver unavailable',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
             ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -927,7 +962,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                     Expanded(
                       child: Text(
                         peer.displayName ?? '',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ],
@@ -958,8 +996,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         );
 
         // Reset sending state and optionally navigate to chat.
-        ref.read(chatControllerProvider.notifier).setWalkieSending(isSending: false);
-        ref.read(chatControllerProvider.notifier).setWalkieLastError('Receiver walkie offline');
+        ref
+            .read(chatControllerProvider.notifier)
+            .setWalkieSending(isSending: false);
+        ref
+            .read(chatControllerProvider.notifier)
+            .setWalkieLastError('Receiver walkie offline');
 
         // Delete the recorded file since we're not sending it now.
         try {
@@ -971,7 +1013,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
         if (choice == true) {
           // Select the private conversation and open chat.
-          controller.selectConversation(PrivateConversation(peerNodeId: conv.peerNodeId, peerName: peer.displayName));
+          controller.selectConversation(
+            PrivateConversation(
+              peerNodeId: conv.peerNodeId,
+              peerName: peer.displayName,
+            ),
+          );
           await Navigator.of(context).pushNamed(AppRouter.chat);
         }
 
@@ -2181,8 +2228,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
   Widget _buildModeSelector({
     required bool isPublicMode,
+    required bool isRiderMode,
     required VoidCallback onPrivate,
     required VoidCallback onPublic,
+    required VoidCallback onRider,
   }) {
     Widget buildButton({
       required String label,
@@ -2221,23 +2270,28 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             borderRadius: BorderRadius.circular(14),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    icon,
-                    size: 18,
-                    color: selected ? Colors.black : Colors.white70,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    label,
-                    style: TextStyle(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      icon,
+                      size: 18,
                       color: selected ? Colors.black : Colors.white70,
-                      fontWeight: FontWeight.w700,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 6),
+                    Text(
+                      label,
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: selected ? Colors.black : Colors.white70,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -2250,7 +2304,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         Expanded(
           child: buildButton(
             label: 'Private',
-            selected: !isPublicMode,
+            selected: !isPublicMode && !isRiderMode,
             icon: Icons.lock_outline,
             onTap: onPrivate,
           ),
@@ -2259,12 +2313,216 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         Expanded(
           child: buildButton(
             label: 'Public',
-            selected: isPublicMode,
+            selected: isPublicMode && !isRiderMode,
             icon: Icons.campaign_outlined,
             onTap: onPublic,
           ),
         ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: buildButton(
+            label: 'Rider',
+            selected: isRiderMode,
+            icon: Icons.two_wheeler_rounded,
+            onTap: onRider,
+          ),
+        ),
       ],
+    );
+  }
+
+  Widget _buildRiderPanel({
+    required RiderModeState rider,
+    required MeshPeer? targetPeer,
+    required KnownContact? contact,
+    required bool meshStarted,
+    required bool isTargetOnline,
+    required VoidCallback? onTrustTarget,
+  }) {
+    final riderController = ref.read(riderModeControllerProvider.notifier);
+    final hasUsableTarget = targetPeer != null && isTargetOnline;
+    final isTrustedTarget =
+        contact != null && contact.isTrusted && !contact.isBlocked;
+    final canStart =
+        meshStarted &&
+        hasUsableTarget &&
+        isTrustedTarget;
+    final status = rider.isActive
+        ? 'Live with ${rider.peerName ?? 'rider'}'
+        : rider.isStarting
+        ? 'Starting Rider Mode...'
+        : rider.incomingPeerName != null
+        ? '${rider.incomingPeerName} wants to start Rider Mode'
+        : canStart
+        ? 'Ready for trusted 1:1 rider audio'
+        : hasUsableTarget && !isTrustedTarget
+        ? 'Trust ${targetPeer.displayName} to enable Rider Mode'
+        : 'Choose an online private peer';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.black.withAlpha(86),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withAlpha(20)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                rider.isActive
+                    ? Icons.radio_button_checked
+                    : Icons.two_wheeler_rounded,
+                color: rider.isActive ? Colors.greenAccent : _radioAmber,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  status,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          LinearProgressIndicator(
+            value: rider.inputLevel.clamp(0.0, 1.0),
+            minHeight: 5,
+            color: rider.isMuted ? Colors.white38 : Colors.greenAccent,
+            backgroundColor: Colors.white12,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: SegmentedButton<RiderMicMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: RiderMicMode.alwaysOpen,
+                      label: Text('Open'),
+                      icon: Icon(Icons.mic_rounded),
+                    ),
+                    ButtonSegment(
+                      value: RiderMicMode.voiceActivated,
+                      label: Text('Voice'),
+                      icon: Icon(Icons.graphic_eq_rounded),
+                    ),
+                  ],
+                  selected: {rider.settings.micMode},
+                  onSelectionChanged: (value) =>
+                      unawaited(riderController.setMicMode(value.first)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: SegmentedButton<RiderStartPolicy>(
+                  segments: const [
+                    ButtonSegment(
+                      value: RiderStartPolicy.trustedAutoJoin,
+                      label: Text('Auto'),
+                      icon: Icon(Icons.bolt_rounded),
+                    ),
+                    ButtonSegment(
+                      value: RiderStartPolicy.mutualStart,
+                      label: Text('Ask'),
+                      icon: Icon(Icons.handshake_outlined),
+                    ),
+                  ],
+                  selected: {rider.settings.startPolicy},
+                  onSelectionChanged: (value) =>
+                      unawaited(riderController.setStartPolicy(value.first)),
+                ),
+              ),
+            ],
+          ),
+          if (rider.lastError != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              rider.lastError!,
+              style: TextStyle(color: Colors.redAccent.shade100),
+            ),
+          ],
+          const SizedBox(height: 12),
+          if (!rider.isActive &&
+              hasUsableTarget &&
+              !isTrustedTarget &&
+              onTrustTarget != null) ...[
+            FilledButton.icon(
+              onPressed: onTrustTarget,
+              icon: const Icon(Icons.verified_rounded),
+              label: Text('Trust ${targetPeer.displayName}'),
+            ),
+            const SizedBox(height: 10),
+          ],
+          if (rider.incomingPeerName != null && !rider.isActive)
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () =>
+                        unawaited(riderController.declineIncoming()),
+                    child: const Text('Decline'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () =>
+                        unawaited(riderController.acceptIncoming()),
+                    icon: const Icon(Icons.call_rounded),
+                    label: const Text('Accept'),
+                  ),
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: rider.isActive
+                        ? () => unawaited(riderController.endSession())
+                        : canStart && !rider.isStarting
+                        ? () => unawaited(
+                            riderController.startSession(targetPeer),
+                          )
+                        : null,
+                    icon: Icon(
+                      rider.isActive
+                          ? Icons.call_end_rounded
+                          : Icons.call_rounded,
+                    ),
+                    label: Text(
+                      rider.isActive ? 'End Rider Mode' : 'Start Rider Mode',
+                    ),
+                  ),
+                ),
+                if (rider.isActive) ...[
+                  const SizedBox(width: 10),
+                  IconButton.filledTonal(
+                    onPressed: () =>
+                        unawaited(riderController.setMuted(!rider.isMuted)),
+                    icon: Icon(
+                      rider.isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                    ),
+                    tooltip: rider.isMuted ? 'Unmute' : 'Mute',
+                  ),
+                ],
+              ],
+            ),
+        ],
+      ),
     );
   }
 
@@ -2284,19 +2542,19 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         ? targetName
         : 'No private target selected';
     final description = isPublicMode
-      ? 'Hold to broadcast when mesh is running.'
-      : hasTarget
-      ? isTargetOnline
-          ? (canReceivePrivate
-            ? '$targetName is online and ready to talk.'
-            : '$targetName is online but away from the private walkie screen.')
-          : '$targetName is not online yet.'
-      : 'Choose someone nearby to start a private walkie.';
+        ? 'Hold to broadcast when mesh is running.'
+        : hasTarget
+        ? isTargetOnline
+              ? (canReceivePrivate
+                    ? '$targetName is online and ready to talk.'
+                    : '$targetName is online but away from the private walkie screen.')
+              : '$targetName is not online yet.'
+        : 'Choose someone nearby to start a private walkie.';
     final badgeColor = isPublicMode
-      ? _radioAmber
-      : isTargetOnline
-      ? (canReceivePrivate ? const Color(0xFF57D163) : _radioAmber)
-      : Colors.white60;
+        ? _radioAmber
+        : isTargetOnline
+        ? (canReceivePrivate ? const Color(0xFF57D163) : _radioAmber)
+        : Colors.white60;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2532,9 +2790,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                       ? stayOnlineIconColor
                       : Colors.grey.shade700,
                 ),
-                label: Text(
-                  stayOnlineOn ? 'Online' : 'Offline',
-                ),
+                label: Text(stayOnlineOn ? 'Online' : 'Offline'),
               ),
             ),
           ],
@@ -2929,6 +3185,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
 
     final state = ref.watch(chatControllerProvider);
+    final riderState = ref.watch(riderModeControllerProvider);
     final isHolding = state.walkieIsTransmitting;
     final isSending = state.walkieIsSending;
     final selected = state.selectedConversation;
@@ -2936,48 +3193,63 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         ? selected.peerNodeId
         : state.walkiePeerNodeId;
     final hasTarget = targetNodeId != null && targetNodeId.isNotEmpty;
+    final targetPeer = hasTarget ? _peerByNodeId(targetNodeId) : null;
     final targetName = selected is PrivateConversation
         ? selected.peerName
-        : 'Private target';
+        : targetPeer?.displayName ?? 'Private target';
     final isTargetOnline =
         hasTarget && state.peers.any((p) => p.nodeId == targetNodeId);
     final isIncomingInvite = state.walkieInviteIsIncoming;
-    final isActiveSessionForTarget = _isPublicMode
+    final isActiveSessionForTarget = _isRiderMode
+        ? false
+        : _isPublicMode
         ? state.meshStarted
         : hasTarget && state.walkieSessionActivePeerNodeId == targetNodeId;
     final isOutgoingInviteForTarget =
         !_isPublicMode &&
+        !_isRiderMode &&
         !isIncomingInvite &&
         hasTarget &&
         state.walkieInvitePeerNodeId == targetNodeId &&
         !isActiveSessionForTarget;
     final selectedPrivateContact = !_isPublicMode && hasTarget
-      ? state.knownContacts.cast<KnownContact?>().firstWhere(
-        (item) => item?.nodeId == targetNodeId,
-        orElse: () => null,
-        )
-      : null;
+        ? state.knownContacts.cast<KnownContact?>().firstWhere(
+            (item) => item?.nodeId == targetNodeId,
+            orElse: () => null,
+          )
+        : null;
     final privateStayOnlineEligible =
-      selectedPrivateContact != null && selectedPrivateContact.isTrusted;
+        selectedPrivateContact != null && selectedPrivateContact.isTrusted;
     final stayOnlineOn = _isPublicMode
         ? state.publicWalkieStayOnline
         : (selectedPrivateContact?.walkieAlwaysOn ?? false);
-    final stayOnlineEnabled = !(isHolding || isSending) && (_isPublicMode || hasTarget);
+    final stayOnlineEnabled =
+        !_isRiderMode &&
+        !(isHolding || isSending) &&
+        (_isPublicMode || hasTarget);
     final stayOnlineHint = _isPublicMode
         ? 'Keep receiving public walkie voice across screens.'
-      : !hasTarget
+        : !hasTarget
         ? 'Select a private target to enable stay online.'
         : privateStayOnlineEligible
         ? 'Latches always-on walkie for this trusted friend.'
         : 'Trust this friend first to enable private stay online.';
-    final targetPeer = hasTarget ? _peerByNodeId(targetNodeId) : null;
+    final riderTrustNodeId =
+        _isRiderMode && isTargetOnline ? targetPeer?.nodeId : null;
+    final riderTrustName = targetPeer?.displayName ?? targetName;
     final speakerActive =
         isHolding ||
         isSending ||
         (_status?.startsWith('Incoming walkie') ?? false);
     _syncSpeakerPulse(speakerActive);
     final controller = ref.read(chatControllerProvider.notifier);
-    final actionHintLabel = _isPublicMode
+    final actionHintLabel = _isRiderMode
+        ? (riderState.isActive
+              ? (riderState.isMuted
+                    ? 'Rider Mode is live and your mic is muted.'
+                    : 'Rider Mode is live. Use mute when needed.')
+              : 'Start Rider Mode with a trusted online private peer.')
+        : _isPublicMode
         ? (!state.playServicesAvailable
               ? 'Play Services is unavailable on this device.'
               : state.isMeshStarting
@@ -3099,19 +3371,46 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                               const SizedBox(height: 14),
                               _buildModeSelector(
                                 isPublicMode: _isPublicMode,
+                                isRiderMode: _isRiderMode,
                                 onPrivate: () {
                                   setState(() {
                                     _isPublicMode = false;
+                                    _isRiderMode = false;
                                     _status = null;
                                   });
-                                  unawaited(ref.read(chatControllerProvider.notifier).publishWalkieAvailability(true));
+                                  unawaited(
+                                    ref
+                                        .read(chatControllerProvider.notifier)
+                                        .publishWalkieAvailability(true),
+                                  );
                                 },
                                 onPublic: () {
                                   setState(() {
                                     _isPublicMode = true;
+                                    _isRiderMode = false;
                                     _status = null;
                                   });
-                                  unawaited(ref.read(chatControllerProvider.notifier).publishWalkieAvailability(stayOnlineOn));
+                                  unawaited(
+                                    ref
+                                        .read(chatControllerProvider.notifier)
+                                        .publishWalkieAvailability(
+                                          stayOnlineOn,
+                                        ),
+                                  );
+                                },
+                                onRider: () {
+                                  setState(() {
+                                    _isPublicMode = false;
+                                    _isRiderMode = true;
+                                    _status = null;
+                                  });
+                                  unawaited(
+                                    ref
+                                        .read(
+                                          riderModeControllerProvider.notifier,
+                                        )
+                                        .armPresence(true),
+                                  );
                                 },
                               ),
                               const SizedBox(height: 14),
@@ -3122,114 +3421,159 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                     ? targetName
                                     : 'Private target',
                                 isTargetOnline: isTargetOnline,
-                                canReceivePrivate: !_isPublicMode && isTargetOnline && (selectedPrivateContact?.remoteWalkieAvailable ?? false),
+                                canReceivePrivate:
+                                    !_isPublicMode &&
+                                    isTargetOnline &&
+                                    (selectedPrivateContact
+                                            ?.remoteWalkieAvailable ??
+                                        false),
                                 isHolding: isHolding,
                                 isSending: isSending,
                                 onChooseTarget: _chooseTarget,
                               ),
                               const SizedBox(height: 12),
-                              _buildSessionActionCard(
-                                isPublicMode: _isPublicMode,
-                                meshStarted: state.meshStarted,
-                                isMeshStarting: state.isMeshStarting,
-                                playServicesAvailable:
-                                    state.playServicesAvailable,
-                                hasTarget: hasTarget,
-                                isTargetOnline: isTargetOnline,
-                                isActiveSessionForTarget:
-                                    isActiveSessionForTarget,
-                                isIncomingInvite: isIncomingInvite,
-                                isOutgoingInviteForTarget:
-                                    isOutgoingInviteForTarget,
-                                onAcceptInvite: () =>
-                                    unawaited(controller.acceptWalkieInvite()),
-                                onCancelInvite: () =>
-                                    unawaited(controller.cancelWalkieInvite()),
-                                onEndSession: () =>
-                                    unawaited(controller.endWalkieSession()),
-                                onInvite:
-                                    targetPeer != null &&
-                                        hasTarget &&
-                                        isTargetOnline
-                                    ? () => unawaited(_invitePeer(targetPeer))
-                                    : null,
-                                onStartMesh:
-                                    state.playServicesAvailable &&
-                                        !state.meshStarted
-                                    ? () => unawaited(controller.startMesh())
-                                    : null,
-                              ),
-                              const SizedBox(height: 12),
-                              _buildSecondaryActions(
-                                isHolding: isHolding,
-                                isSending: isSending,
-                                stayOnlineOn: stayOnlineOn,
-                                stayOnlineEnabled: stayOnlineEnabled,
-                                stayOnlineHint: stayOnlineHint,
-                                onOpenChat: () async {
-                                  if (isHolding || isSending) return;
-                                  _triggerButtonFeedback();
-                                  if (!_isPublicMode) {
-                                    unawaited(
-                                      controller.publishWalkieAvailability(
-                                        stayOnlineOn,
-                                      ),
-                                    );
-                                  }
-                                  final navigator = Navigator.of(context);
-                                  if (!mounted) return;
-                                  await navigator.pushNamed(AppRouter.chat);
-                                },
-                                onToggleStayOnline: () {
-                                  if (!stayOnlineEnabled) return;
-                                  _triggerButtonFeedback();
-                                  if (_isPublicMode) {
-                                    controller.setPublicWalkieStayOnline(
-                                      !stayOnlineOn,
-                                    );
-                                  } else if (targetNodeId != null) {
-                                    final contact = state.knownContacts
-                                        .cast<KnownContact?>()
-                                        .firstWhere(
-                                          (item) => item?.nodeId == targetNodeId,
-                                          orElse: () => null,
-                                        );
-                                    if (contact == null) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Private profile is still syncing. Try again in a moment.',
-                                          ),
-                                          behavior: SnackBarBehavior.floating,
-                                          duration: Duration(seconds: 2),
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    if (!contact.isTrusted) {
-                                      controller.trustContact(targetNodeId);
-                                    }
-                                    controller.setWalkieAlwaysOn(
-                                      targetNodeId,
-                                      !stayOnlineOn,
-                                    );
-                                  }
-                                },
-                              ),
-                              const SizedBox(height: 18),
-                              Center(
-                                child: _buildPttButton(
-                                  isEnabled: isActiveSessionForTarget,
-                                  isHolding: isHolding,
-                                  isSending: isSending,
-                                  speakerActive: speakerActive,
-                                  idleLabel: pttIdleLabel,
-                                  size: 220,
-                                  onCancel: isActiveSessionForTarget
-                                      ? () => unawaited(_cancelHoldRecording())
+                              if (_isRiderMode)
+                                _buildRiderPanel(
+                                  rider: riderState,
+                                  targetPeer: targetPeer,
+                                  contact: selectedPrivateContact,
+                                  meshStarted: state.meshStarted,
+                                  isTargetOnline: isTargetOnline,
+                                  onTrustTarget: riderTrustNodeId != null
+                                      ? () {
+                                          unawaited(
+                                            controller.trustContact(
+                                              riderTrustNodeId,
+                                            ),
+                                          );
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                '$riderTrustName trusted for Rider Mode',
+                                              ),
+                                              behavior:
+                                                  SnackBarBehavior.floating,
+                                              duration: const Duration(
+                                                seconds: 2,
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      : null,
+                                )
+                              else
+                                _buildSessionActionCard(
+                                  isPublicMode: _isPublicMode,
+                                  meshStarted: state.meshStarted,
+                                  isMeshStarting: state.isMeshStarting,
+                                  playServicesAvailable:
+                                      state.playServicesAvailable,
+                                  hasTarget: hasTarget,
+                                  isTargetOnline: isTargetOnline,
+                                  isActiveSessionForTarget:
+                                      isActiveSessionForTarget,
+                                  isIncomingInvite: isIncomingInvite,
+                                  isOutgoingInviteForTarget:
+                                      isOutgoingInviteForTarget,
+                                  onAcceptInvite: () => unawaited(
+                                    controller.acceptWalkieInvite(),
+                                  ),
+                                  onCancelInvite: () => unawaited(
+                                    controller.cancelWalkieInvite(),
+                                  ),
+                                  onEndSession: () =>
+                                      unawaited(controller.endWalkieSession()),
+                                  onInvite:
+                                      targetPeer != null &&
+                                          hasTarget &&
+                                          isTargetOnline
+                                      ? () => unawaited(_invitePeer(targetPeer))
+                                      : null,
+                                  onStartMesh:
+                                      state.playServicesAvailable &&
+                                          !state.meshStarted
+                                      ? () => unawaited(controller.startMesh())
                                       : null,
                                 ),
-                              ),
+                              const SizedBox(height: 12),
+                              if (!_isRiderMode)
+                                _buildSecondaryActions(
+                                  isHolding: isHolding,
+                                  isSending: isSending,
+                                  stayOnlineOn: stayOnlineOn,
+                                  stayOnlineEnabled: stayOnlineEnabled,
+                                  stayOnlineHint: stayOnlineHint,
+                                  onOpenChat: () async {
+                                    if (isHolding || isSending) return;
+                                    _triggerButtonFeedback();
+                                    if (!_isPublicMode) {
+                                      unawaited(
+                                        controller.publishWalkieAvailability(
+                                          stayOnlineOn,
+                                        ),
+                                      );
+                                    }
+                                    final navigator = Navigator.of(context);
+                                    if (!mounted) return;
+                                    await navigator.pushNamed(AppRouter.chat);
+                                  },
+                                  onToggleStayOnline: () {
+                                    if (!stayOnlineEnabled) return;
+                                    _triggerButtonFeedback();
+                                    if (_isPublicMode) {
+                                      controller.setPublicWalkieStayOnline(
+                                        !stayOnlineOn,
+                                      );
+                                    } else if (targetNodeId != null) {
+                                      final contact = state.knownContacts
+                                          .cast<KnownContact?>()
+                                          .firstWhere(
+                                            (item) =>
+                                                item?.nodeId == targetNodeId,
+                                            orElse: () => null,
+                                          );
+                                      if (contact == null) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Private profile is still syncing. Try again in a moment.',
+                                            ),
+                                            behavior: SnackBarBehavior.floating,
+                                            duration: Duration(seconds: 2),
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      if (!contact.isTrusted) {
+                                        controller.trustContact(targetNodeId);
+                                      }
+                                      controller.setWalkieAlwaysOn(
+                                        targetNodeId,
+                                        !stayOnlineOn,
+                                      );
+                                    }
+                                  },
+                                ),
+                              const SizedBox(height: 18),
+                              if (!_isRiderMode)
+                                Center(
+                                  child: _buildPttButton(
+                                    isEnabled: isActiveSessionForTarget,
+                                    isHolding: isHolding,
+                                    isSending: isSending,
+                                    speakerActive: speakerActive,
+                                    idleLabel: pttIdleLabel,
+                                    size: 220,
+                                    onCancel: isActiveSessionForTarget
+                                        ? () =>
+                                              unawaited(_cancelHoldRecording())
+                                        : null,
+                                  ),
+                                ),
                               const SizedBox(height: 12),
                               Text(
                                 actionHintLabel,

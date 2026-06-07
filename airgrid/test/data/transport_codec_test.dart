@@ -156,25 +156,25 @@ void main() {
       _expectRoundTrip(p, TransportCodec.decode(TransportCodec.encode(p)));
     });
 
-      test('image packet round-trip', () {
-        final packet = AirGridPacket(
-          messageId: 'img-rt-1',
-          senderNodeId: 'node-alice',
-          senderName: 'Alice',
-          timestamp: 1700000000000,
-          content: '{"kind":"image","data":"abc"}',
-          seenByNodes: const ['node-alice'],
-          hopLimit: 8,
-          packetType: 'image',
-          conversationType: 'private',
-          recipientNodeId: 'node-bob',
-          encryptionVersion: 1,
-        );
+    test('image packet round-trip', () {
+      final packet = AirGridPacket(
+        messageId: 'img-rt-1',
+        senderNodeId: 'node-alice',
+        senderName: 'Alice',
+        timestamp: 1700000000000,
+        content: '{"kind":"image","data":"abc"}',
+        seenByNodes: const ['node-alice'],
+        hopLimit: 8,
+        packetType: 'image',
+        conversationType: 'private',
+        recipientNodeId: 'node-bob',
+        encryptionVersion: 1,
+      );
 
-        final bytes = TransportCodec.encode(packet);
-        final decoded = TransportCodec.decode(bytes);
-        _expectRoundTrip(packet, decoded);
-      });
+      final bytes = TransportCodec.encode(packet);
+      final decoded = TransportCodec.decode(bytes);
+      _expectRoundTrip(packet, decoded);
+    });
 
     test('key_announce round-trip with senderPublicKey', () {
       final p = AirGridPacket(
@@ -240,6 +240,42 @@ void main() {
         conversationType: 'private',
         recipientNodeId: 'node-alice',
         receiptMessageId: 'priv-rt-2',
+      );
+      _expectRoundTrip(p, TransportCodec.decode(TransportCodec.encode(p)));
+    });
+
+    test('rider control round-trip', () {
+      final p = AirGridPacket(
+        messageId: 'rider-control-1',
+        senderNodeId: 'node-alice',
+        senderName: 'Alice',
+        timestamp: 1700000000005,
+        content: 'encrypted-control',
+        seenByNodes: ['node-alice'],
+        hopLimit: 1,
+        packetType: 'rider_control',
+        conversationType: 'private',
+        recipientNodeId: 'node-bob',
+        senderPublicKey: 'public-key',
+        encryptionVersion: 1,
+      );
+      _expectRoundTrip(p, TransportCodec.decode(TransportCodec.encode(p)));
+    });
+
+    test('rider audio frame round-trip', () {
+      final p = AirGridPacket(
+        messageId: 'rider-frame-1',
+        senderNodeId: 'node-alice',
+        senderName: 'Alice',
+        timestamp: 1700000000006,
+        content: 'encrypted-frame',
+        seenByNodes: ['node-alice'],
+        hopLimit: 1,
+        packetType: 'rider_audio_frame',
+        conversationType: 'private',
+        recipientNodeId: 'node-bob',
+        senderPublicKey: 'public-key',
+        encryptionVersion: 1,
       );
       _expectRoundTrip(p, TransportCodec.decode(TransportCodec.encode(p)));
     });

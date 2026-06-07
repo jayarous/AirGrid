@@ -27,6 +27,9 @@ class PublicWalkieStatusIcon extends ConsumerWidget {
           Navigator.of(context).pushNamed(AppRouter.walkie);
         },
         child: IconButton(
+          tooltip: active
+              ? 'Turn public walkie offline'
+              : 'Turn public walkie online',
           onPressed: () {
             ref
                 .read(chatControllerProvider.notifier)

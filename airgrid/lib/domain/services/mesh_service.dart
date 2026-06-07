@@ -23,6 +23,7 @@ import 'package:airgrid/domain/models/media_attachment.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/models/peer_location.dart';
 import 'package:airgrid/domain/models/privacy_mode.dart';
+import 'package:airgrid/domain/models/rider_mode_event.dart';
 import 'package:airgrid/domain/services/private_receipt_controller.dart';
 import 'package:airgrid/domain/services/relay_controller.dart';
 import 'package:airgrid/domain/services/transport_service.dart';
@@ -32,8 +33,16 @@ class _KeyAnnounceProfileMeta {
   final String? iconId;
   final String? status;
   final bool? walkieAvailable;
+  final bool? riderSupported;
+  final bool? riderArmed;
 
-  const _KeyAnnounceProfileMeta({this.iconId, this.status, this.walkieAvailable});
+  const _KeyAnnounceProfileMeta({
+    this.iconId,
+    this.status,
+    this.walkieAvailable,
+    this.riderSupported,
+    this.riderArmed,
+  });
 }
 
 // -- Spool entry -------------------------------------------------------
@@ -139,6 +148,7 @@ class AirGridMeshService {
   final _messageController = StreamController<AirGridMessage>.broadcast();
   final _peerController = StreamController<List<MeshPeer>>.broadcast();
   final _locationController = StreamController<PeerLocation>.broadcast();
+  final _riderController = StreamController<RiderModeEvent>.broadcast();
   final _statusController =
       StreamController<({String messageId, DeliveryStatus status})>.broadcast();
 
@@ -170,6 +180,9 @@ class AirGridMeshService {
 
   /// Per-peer inbound packet rate limiters (keyed by endpoint ID).
   late final PerPeerRateLimiterMap _inboundLimiters;
+
+  /// Per-peer inbound Rider Mode frame limiters (keyed by endpoint ID).
+  late final PerPeerRateLimiterMap _riderInboundLimiters;
 
   /// Key announce cooldown tracker (keyed by nodeId:publicKey).
   late final KeyAnnounceCooldownTracker _keyAnnounceCooldown;
@@ -213,6 +226,12 @@ class AirGridMeshService {
       idleEviction: AirGridConstants.kRateLimiterIdleEviction,
       clock: clock,
     );
+    _riderInboundLimiters = PerPeerRateLimiterMap(
+      burstCapacity: AirGridConstants.kRiderInboundFrameBurst,
+      tokensPerSecond: AirGridConstants.kRiderInboundFrameRatePerSec,
+      idleEviction: AirGridConstants.kRateLimiterIdleEviction,
+      clock: clock,
+    );
     _keyAnnounceCooldown = KeyAnnounceCooldownTracker(
       cooldown: AirGridConstants.kKeyAnnounceCooldown,
       clock: clock,
@@ -246,10 +265,9 @@ class AirGridMeshService {
         }
       },
       sendPlainControl: (packet, targetEndpointId) {
-        return _transport.sendToEndpoints(
-          [targetEndpointId],
-          TransportCodec.encode(packet),
-        );
+        return _transport.sendToEndpoints([
+          targetEndpointId,
+        ], TransportCodec.encode(packet));
       },
       resolveReceiptAlias: (receiptMessageId) =>
           _receiptMessageAliases[receiptMessageId] ?? receiptMessageId,
@@ -276,9 +294,9 @@ class AirGridMeshService {
 
   Future<void> _sendPacketFragments(
     AirGridPacket packet,
-    List<String> targets,
-    {void Function(double progress)? onProgress}
-  ) async {
+    List<String> targets, {
+    void Function(double progress)? onProgress,
+  }) async {
     final paced = _shouldPaceFragments(packet);
     final maxAttempts = paced ? 6 : 3;
     final fragments = PacketFragmenter.fragment(packet);
@@ -323,6 +341,9 @@ class AirGridMeshService {
 
   /// Stream of peer location updates shared by online users.
   Stream<PeerLocation> get locationStream => _locationController.stream;
+
+  /// Stream of private Rider Mode control and audio-frame events.
+  Stream<RiderModeEvent> get riderEvents => _riderController.stream;
 
   /// Stream of delivery status updates for outgoing private messages.
   Stream<({String messageId, DeliveryStatus status})> get statusStream =>
@@ -405,7 +426,9 @@ class AirGridMeshService {
   /// handshake is required.
   Future<void> sendPublicAudio(AudioAttachmentPayload audio) async {
     if (!_outboundLimiter.allow()) {
-      throw StateError('Audio rate limited. Please wait before transmitting again.');
+      throw StateError(
+        'Audio rate limited. Please wait before transmitting again.',
+      );
     }
 
     final localNodeId = _identity.nodeId;
@@ -450,6 +473,96 @@ class AirGridMeshService {
       LogCategory.routing,
       'Sent public walkie ${packet.messageId} to ${targets.length} peer(s)',
     );
+  }
+
+  Future<bool> sendRiderControl({
+    required MeshPeer peer,
+    required RiderControlPayload control,
+  }) async {
+    final recipientNodeId = peer.nodeId;
+    if (recipientNodeId == null) return false;
+    if (_contactStore.isBlocked(recipientNodeId) ||
+        !_contactStore.isTrusted(recipientNodeId) ||
+        !_cryptoService.hasKey(recipientNodeId) ||
+        !_transport.connectedEndpoints.contains(peer.endpointId)) {
+      return false;
+    }
+
+    final encrypted = await _cryptoService.encryptContent(
+      control.toWire(),
+      recipientNodeId,
+    );
+    if (encrypted == null) return false;
+
+    final localNodeId = _identity.nodeId;
+    final packet = AirGridPacket(
+      messageId: const Uuid().v4(),
+      senderNodeId: localNodeId,
+      senderName: _identity.displayName ?? 'Unknown',
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      content: encrypted,
+      seenByNodes: [localNodeId],
+      hopLimit: 1,
+      packetType: 'rider_control',
+      senderPublicKey: _identity.publicKeyBase64,
+      encryptionVersion: 1,
+      conversationType: 'private',
+      recipientNodeId: recipientNodeId,
+    );
+
+    try {
+      await _transport.sendToEndpoints([
+        peer.endpointId,
+      ], TransportCodec.encode(packet));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> sendRiderAudioFrame({
+    required MeshPeer peer,
+    required RiderAudioFramePayload frame,
+  }) async {
+    final recipientNodeId = peer.nodeId;
+    if (recipientNodeId == null) return false;
+    if (_contactStore.isBlocked(recipientNodeId) ||
+        !_contactStore.isTrusted(recipientNodeId) ||
+        !_cryptoService.hasKey(recipientNodeId) ||
+        !_transport.connectedEndpoints.contains(peer.endpointId)) {
+      return false;
+    }
+
+    final encrypted = await _cryptoService.encryptContent(
+      frame.toWire(),
+      recipientNodeId,
+    );
+    if (encrypted == null) return false;
+
+    final localNodeId = _identity.nodeId;
+    final packet = AirGridPacket(
+      messageId: const Uuid().v4(),
+      senderNodeId: localNodeId,
+      senderName: _identity.displayName ?? 'Unknown',
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      content: encrypted,
+      seenByNodes: [localNodeId],
+      hopLimit: 1,
+      packetType: 'rider_audio_frame',
+      senderPublicKey: _identity.publicKeyBase64,
+      encryptionVersion: 1,
+      conversationType: 'private',
+      recipientNodeId: recipientNodeId,
+    );
+
+    try {
+      await _transport.sendToEndpoints([
+        peer.endpointId,
+      ], TransportCodec.encode(packet));
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Send a private message directly to [peer].
@@ -567,7 +680,10 @@ class AirGridMeshService {
         targets.add(peer.endpointId);
       }
       for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints(targets, TransportCodec.encode(outgoing));
+        await _transport.sendToEndpoints(
+          targets,
+          TransportCodec.encode(outgoing),
+        );
       }
 
       AirGridLogger.log(
@@ -942,13 +1058,11 @@ class AirGridMeshService {
   /// Sends a private image to a known contact; supports relay/spool flow.
   Future<PrivateSendResult> sendPrivateImageToContact(
     KnownContact contact,
-    ImageAttachmentPayload image,
-    {
+    ImageAttachmentPayload image, {
     String? messageId,
     String? packetId,
     bool emitLocalMessage = true,
-  }
-  ) async {
+  }) async {
     if (_contactStore.isBlocked(contact.nodeId)) {
       return PrivateSendResult.blockedContact;
     }
@@ -1185,13 +1299,11 @@ class AirGridMeshService {
   /// Sends a private voice note to a known contact; supports relay/spool flow.
   Future<PrivateSendResult> sendPrivateAudioToContact(
     KnownContact contact,
-    AudioAttachmentPayload audio,
-    {
+    AudioAttachmentPayload audio, {
     String? messageId,
     String? packetId,
     bool emitLocalMessage = true,
-  }
-  ) async {
+  }) async {
     if (_contactStore.isBlocked(contact.nodeId)) {
       return PrivateSendResult.blockedContact;
     }
@@ -1379,11 +1491,7 @@ class AirGridMeshService {
       if (encrypted && !targets.contains(peer.endpointId)) {
         targets.add(peer.endpointId);
       }
-      await _sendPacketFragments(
-        packet,
-        targets,
-        onProgress: onProgress,
-      );
+      await _sendPacketFragments(packet, targets, onProgress: onProgress);
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -1432,14 +1540,12 @@ class AirGridMeshService {
 
   Future<PrivateSendResult> sendPrivateFileToContact(
     KnownContact contact,
-    FileAttachmentPayload file,
-    {
-      String? messageId,
-      String? packetId,
-      bool emitLocalMessage = true,
-      void Function(double progress)? onProgress,
-    }
-  ) async {
+    FileAttachmentPayload file, {
+    String? messageId,
+    String? packetId,
+    bool emitLocalMessage = true,
+    void Function(double progress)? onProgress,
+  }) async {
     if (_contactStore.isBlocked(contact.nodeId)) {
       return PrivateSendResult.blockedContact;
     }
@@ -1518,11 +1624,7 @@ class AirGridMeshService {
     }
 
     try {
-      await _sendPacketFragments(
-        packet,
-        targets,
-        onProgress: onProgress,
-      );
+      await _sendPacketFragments(packet, targets, onProgress: onProgress);
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -1543,6 +1645,7 @@ class AirGridMeshService {
     await _messageController.close();
     await _peerController.close();
     await _locationController.close();
+    await _riderController.close();
     await _statusController.close();
     await _contactStore.dispose();
   }
@@ -1630,8 +1733,10 @@ class AirGridMeshService {
     // Reassembled packets (fromAssembly=true) are synthetic: their underlying
     // fragments were already received, so double-counting them is wrong.
     final isFragment = packet.packetType == 'fragment';
-    if (!fromAssembly && !isFragment && !_inboundLimiters.allow(fromEndpointId)) {
-      final retryAfter = _inboundLimiters.retryAfter(fromEndpointId);
+    final isRiderFrame = packet.packetType == 'rider_audio_frame';
+    final limiter = isRiderFrame ? _riderInboundLimiters : _inboundLimiters;
+    if (!fromAssembly && !isFragment && !limiter.allow(fromEndpointId)) {
+      final retryAfter = limiter.retryAfter(fromEndpointId);
       AirGridLogger.log(
         LogCategory.routing,
         'Inbound packet from $fromEndpointId rate limited '
@@ -1684,10 +1789,12 @@ class AirGridMeshService {
         packet.packetType != 'fragment' &&
         packet.packetType != 'delivery_receipt' &&
         packet.packetType != 'read_receipt' &&
-      packet.packetType != 'location_update' &&
-      packet.packetType != 'image' &&
-      packet.packetType != 'audio' &&
-      packet.packetType != 'file') {
+        packet.packetType != 'location_update' &&
+        packet.packetType != 'image' &&
+        packet.packetType != 'audio' &&
+        packet.packetType != 'file' &&
+        packet.packetType != 'rider_control' &&
+        packet.packetType != 'rider_audio_frame') {
       final contentValidation = MessageContentValidator.validateRemote(
         packet.content,
       );
@@ -1732,10 +1839,12 @@ class AirGridMeshService {
     // -- Gate 3c: trusted-contacts-only mode --------------------------------
     // key_announce is always allowed so unknown nodes can be learned before
     // the user decides to trust them. Chat and location are gated.
-        if ((packet.packetType == 'chat' ||
-          packet.packetType == 'image' ||
-          packet.packetType == 'audio' ||
-          packet.packetType == 'file' ||
+    if ((packet.packetType == 'chat' ||
+            packet.packetType == 'image' ||
+            packet.packetType == 'audio' ||
+            packet.packetType == 'file' ||
+            packet.packetType == 'rider_control' ||
+            packet.packetType == 'rider_audio_frame' ||
             packet.packetType == 'location_update') &&
         !_shouldAcceptFromNode(packet.senderNodeId)) {
       AirGridLogger.log(
@@ -1763,6 +1872,14 @@ class AirGridMeshService {
     if (isPrivate) {
       final rid = packet.recipientNodeId;
       if (rid != null && rid != localNodeId) {
+        if (packet.packetType == 'rider_control' ||
+            packet.packetType == 'rider_audio_frame') {
+          AirGridLogger.log(
+            LogCategory.routing,
+            '${packet.messageId} dropped: Rider Mode packet is direct-only',
+          );
+          return;
+        }
         // Relay encrypted private packets on behalf of others;
         // plaintext private packets are never relayed.
         if (packet.encryptionVersion != null) {
@@ -1802,6 +1919,12 @@ class AirGridMeshService {
     // -- Opportunistic decryption ---------------------------------------
     if (packet.packetType == 'location_update') {
       _handleLocationUpdate(packet, fromEndpointId);
+      return;
+    }
+
+    if (packet.packetType == 'rider_control' ||
+        packet.packetType == 'rider_audio_frame') {
+      await _handleRiderPacket(packet, localNodeId);
       return;
     }
 
@@ -2030,6 +2153,51 @@ class AirGridMeshService {
       send();
     } else {
       Future.delayed(Duration(milliseconds: delayMs), send);
+    }
+  }
+
+  Future<void> _handleRiderPacket(
+    AirGridPacket packet,
+    String localNodeId,
+  ) async {
+    if (packet.conversationType != 'private' ||
+        packet.recipientNodeId != localNodeId ||
+        packet.encryptionVersion != 1 ||
+        packet.senderPublicKey == null ||
+        _contactStore.isBlocked(packet.senderNodeId) ||
+        !_contactStore.isTrusted(packet.senderNodeId)) {
+      return;
+    }
+
+    final plaintext = await _cryptoService.decryptContent(
+      packet.content,
+      packet.senderPublicKey!,
+    );
+    if (plaintext == null) return;
+
+    if (packet.packetType == 'rider_control') {
+      final control = RiderControlPayload.fromWire(plaintext);
+      if (control == null) return;
+      _riderController.add(
+        RiderControlEvent(
+          peerNodeId: packet.senderNodeId,
+          peerName: packet.senderName,
+          control: control,
+        ),
+      );
+      return;
+    }
+
+    if (packet.packetType == 'rider_audio_frame') {
+      final frame = RiderAudioFramePayload.fromWire(plaintext);
+      if (frame == null) return;
+      _riderController.add(
+        RiderAudioFrameEvent(
+          peerNodeId: packet.senderNodeId,
+          peerName: packet.senderName,
+          frame: frame,
+        ),
+      );
     }
   }
 
@@ -2450,7 +2618,8 @@ class AirGridMeshService {
         .toList();
     final targets = <String>[];
 
-    if (preferredEndpointId != null && connected.contains(preferredEndpointId)) {
+    if (preferredEndpointId != null &&
+        connected.contains(preferredEndpointId)) {
       targets.add(preferredEndpointId);
     }
     for (final id in mappedEndpoints) {
@@ -2560,6 +2729,12 @@ class AirGridMeshService {
     _cryptoService.cacheKey(packet.senderNodeId, publicKeyB64);
 
     final profileMeta = _parseKeyAnnounceProfileMeta(packet.content);
+    final existingContact = _contactStore.contacts
+        .cast<KnownContact?>()
+        .firstWhere(
+          (c) => c?.nodeId == packet.senderNodeId,
+          orElse: () => null,
+        );
 
     // Persist/update the known contact. The direct endpoint (if any) is set
     // later in _markDirectPeerReady once identity is confirmed.
@@ -2572,7 +2747,16 @@ class AirGridMeshService {
           profileStatus: profileMeta.status,
           publicKeyBase64: publicKeyB64,
           lastSeenAt: DateTime.now(),
-          remoteWalkieAvailable: profileMeta.walkieAvailable ?? false,
+          remoteWalkieAvailable:
+              profileMeta.walkieAvailable ??
+              existingContact?.remoteWalkieAvailable ??
+              false,
+          riderSupported:
+              profileMeta.riderSupported ??
+              existingContact?.riderSupported ??
+              false,
+          riderArmed:
+              profileMeta.riderArmed ?? existingContact?.riderArmed ?? false,
         ),
       ),
     );
@@ -2655,6 +2839,8 @@ class AirGridMeshService {
       final iconRaw = decoded['profileIconId'];
       final statusRaw = decoded['profileStatus'];
       final walkieRaw = decoded['walkieAvailable'];
+      final riderSupportedRaw = decoded['riderSupported'];
+      final riderArmedRaw = decoded['riderArmed'];
 
       String? iconId;
       String? status;
@@ -2678,7 +2864,23 @@ class AirGridMeshService {
         walkieAvailable = walkieRaw;
       }
 
-      return _KeyAnnounceProfileMeta(iconId: iconId, status: status, walkieAvailable: walkieAvailable);
+      bool? riderSupported;
+      if (riderSupportedRaw is bool) {
+        riderSupported = riderSupportedRaw;
+      }
+
+      bool? riderArmed;
+      if (riderArmedRaw is bool) {
+        riderArmed = riderArmedRaw;
+      }
+
+      return _KeyAnnounceProfileMeta(
+        iconId: iconId,
+        status: status,
+        walkieAvailable: walkieAvailable,
+        riderSupported: riderSupported,
+        riderArmed: riderArmed,
+      );
     } catch (_) {
       return const _KeyAnnounceProfileMeta();
     }

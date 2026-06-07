@@ -70,8 +70,11 @@ class AirGridPacket {
           conversationType == 'private' &&
           encryptionVersion != null) ||
       (packetType == 'chat' && conversationType == 'public') ||
-        (packetType == 'image' && conversationType == 'public') ||
-      (conversationType == 'private' && encryptionVersion != null);
+      (packetType == 'image' && conversationType == 'public') ||
+      (conversationType == 'private' &&
+          encryptionVersion != null &&
+          packetType != 'rider_control' &&
+          packetType != 'rider_audio_frame');
 
   const AirGridPacket({
     required this.messageId,

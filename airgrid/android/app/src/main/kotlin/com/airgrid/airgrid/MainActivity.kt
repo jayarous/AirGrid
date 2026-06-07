@@ -3,16 +3,24 @@ package com.airgrid.airgrid
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
 
@@ -27,10 +35,17 @@ class MainActivity : FlutterActivity() {
     private val playServicesChannelName = "com.airgrid/play_services"
     private val batteryOptimizationChannelName = "com.airgrid/battery_optimization"
     private val platformChannelName = "com.airgrid/platform"
+    private val riderAudioChannelName = "com.airgrid/rider_audio"
     private var foregroundChannel: MethodChannel? = null
     private var playServicesChannel: MethodChannel? = null
     private var batteryOptimizationChannel: MethodChannel? = null
     private var platformChannel: MethodChannel? = null
+    private var riderAudioChannel: MethodChannel? = null
+    private var riderAudioTrack: AudioTrack? = null
+    private val riderAudioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private var previousAudioMode: Int? = null
+    private var previousSpeakerphoneOn: Boolean? = null
+    private var riderWriteCount = 0
     private var pendingExitAction = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -68,6 +83,22 @@ class MainActivity : FlutterActivity() {
                 "showPrivateMessageNotification" -> {
                     val senderName = call.argument<String>("senderName") ?: "Someone"
                     showPrivateMessageNotification(senderName)
+                    result.success(null)
+                }
+                "startRiderService" -> {
+                    val peerName = call.argument<String>("peerName") ?: "Rider"
+                    val muted = call.argument<Boolean>("muted") ?: false
+                    startRiderService(peerName, muted)
+                    result.success(null)
+                }
+                "updateRiderServiceMuted" -> {
+                    val muted = call.argument<Boolean>("muted") ?: false
+                    val peerName = call.argument<String>("peerName") ?: "Rider"
+                    startRiderService(peerName, muted)
+                    result.success(null)
+                }
+                "stopRiderService" -> {
+                    stopService(Intent(this, NearbyForegroundService::class.java))
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -123,6 +154,43 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        riderAudioChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            riderAudioChannelName,
+        )
+
+        riderAudioChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startPlayback" -> {
+                    val sampleRate = call.argument<Int>("sampleRate") ?: 8000
+                    val channels = call.argument<Int>("channels") ?: 1
+                    startRiderPlayback(sampleRate, channels)
+                    result.success(null)
+                }
+                "enqueuePcm" -> {
+                    val bytes = call.arguments as? ByteArray
+                    if (bytes != null) {
+                        riderAudioExecutor.execute {
+                            try {
+                                val written = riderAudioTrack?.write(bytes, 0, bytes.size) ?: 0
+                                riderWriteCount++
+                                if (riderWriteCount % 20 == 0) {
+                                    Log.d("AirGridRiderAudio", "wrote $written/${bytes.size} PCM bytes")
+                                }
+                            } catch (_: IllegalStateException) {
+                            }
+                        }
+                    }
+                    result.success(null)
+                }
+                "stopPlayback" -> {
+                    stopRiderPlayback()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         handleNotificationAction(intent)
     }
 
@@ -133,9 +201,85 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun handleNotificationAction(intent: Intent?) {
-        if (intent?.action != ACTION_EXIT_MESH) return
+        val action = intent?.action ?: return
+        if (action == NearbyForegroundService.ACTION_RIDER_MUTE) {
+            foregroundChannel?.invokeMethod("riderMute", null)
+            return
+        }
+        if (action == NearbyForegroundService.ACTION_RIDER_END) {
+            foregroundChannel?.invokeMethod("riderEnd", null)
+            return
+        }
+        if (action != ACTION_EXIT_MESH) return
         pendingExitAction = true
         foregroundChannel?.invokeMethod("exitMesh", null)
+    }
+
+    private fun startRiderService(peerName: String, muted: Boolean) {
+        val intent = Intent(this, NearbyForegroundService::class.java).apply {
+            putExtra("riderMode", true)
+            putExtra("peerName", peerName)
+            putExtra("muted", muted)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+    }
+
+    private fun startRiderPlayback(sampleRate: Int, channels: Int) {
+        stopRiderPlayback()
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        previousAudioMode = audioManager.mode
+        previousSpeakerphoneOn = audioManager.isSpeakerphoneOn
+        audioManager.mode = AudioManager.MODE_NORMAL
+        audioManager.isSpeakerphoneOn = true
+        riderWriteCount = 0
+        val channelConfig = if (channels == 1) {
+            AudioFormat.CHANNEL_OUT_MONO
+        } else {
+            AudioFormat.CHANNEL_OUT_STEREO
+        }
+        val minBuffer = AudioTrack.getMinBufferSize(
+            sampleRate,
+            channelConfig,
+            AudioFormat.ENCODING_PCM_16BIT,
+        ).coerceAtLeast(sampleRate / 2)
+        riderAudioTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setSampleRate(sampleRate)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(channelConfig)
+                    .build(),
+            )
+            .setBufferSizeInBytes(minBuffer)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+        riderAudioTrack?.setVolume(AudioTrack.getMaxVolume())
+        riderAudioTrack?.play()
+        Log.d("AirGridRiderAudio", "started playback sampleRate=$sampleRate channels=$channels buffer=$minBuffer")
+    }
+
+    private fun stopRiderPlayback() {
+        try {
+            riderAudioTrack?.stop()
+        } catch (_: IllegalStateException) {
+        }
+        riderAudioTrack?.release()
+        riderAudioTrack = null
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        previousSpeakerphoneOn?.let { audioManager.isSpeakerphoneOn = it }
+        previousAudioMode?.let { audioManager.mode = it }
+        previousSpeakerphoneOn = null
+        previousAudioMode = null
     }
 
     private fun playServicesStatusMap(): Map<String, Any> {
