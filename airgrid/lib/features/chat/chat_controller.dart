@@ -157,6 +157,7 @@ class ChatController extends Notifier<ChatState> {
   bool _batterySettingLoaded = false;
   bool _publicWalkieSettingLoaded = false;
   bool _stoppedByBatteryOptimization = false;
+  bool _lastPublishedWalkieAvailability = false;
   DateTime? _lastLocationPublishAt;
 
   /// Endpoint IDs of currently connected peers, tracked to detect new joins.
@@ -401,7 +402,9 @@ class ChatController extends Notifier<ChatState> {
       );
 
       // Announce our public key to any peers already connected at startup.
-      await _mesh.sendKeyAnnounce();
+      await _mesh.sendKeyAnnounce(
+        extraMeta: {'walkieAvailable': _lastPublishedWalkieAvailability},
+      );
 
       // Load the persisted privacy mode.
       final privacyMode = await _privacyStore.getPrivacyMode();
@@ -541,7 +544,9 @@ class ChatController extends Notifier<ChatState> {
 
         if (hasNewPeers) {
           // Re-announce key whenever a new peer connects so they can cache it.
-          await _mesh.sendKeyAnnounce();
+          await _mesh.sendKeyAnnounce(
+            extraMeta: {'walkieAvailable': _lastPublishedWalkieAvailability},
+          );
         }
 
         // Filter out blocked peers before updating visible state.
@@ -629,7 +634,9 @@ class ChatController extends Notifier<ChatState> {
     if (!state.meshStarted) {
       return;
     }
-    await _mesh.sendKeyAnnounce();
+    await _mesh.sendKeyAnnounce(
+      extraMeta: {'walkieAvailable': _lastPublishedWalkieAvailability},
+    );
   }
 
   Future<void> handleAppLifecycleState(AppLifecycleState lifecycleState) async {
@@ -709,12 +716,18 @@ class ChatController extends Notifier<ChatState> {
     final deadline = DateTime.now().add(timeout);
 
     while (DateTime.now().isBefore(deadline)) {
+      final contact = state.knownContacts.cast<KnownContact?>().firstWhere(
+        (item) => item?.nodeId == nodeId,
+        orElse: () => null,
+      );
       final peerReady = state.peers.any((peer) => peer.nodeId == nodeId);
       final contactReady = state.knownContacts.any(
         (contact) => contact.nodeId == nodeId && contact.isDirectlyConnected,
       );
+      final renamedOrReinstalledPeerReady =
+          contact != null && _hasSingleOnlinePeerNamed(contact.displayName);
 
-      if (peerReady || contactReady) {
+      if (peerReady || contactReady || renamedOrReinstalledPeerReady) {
         await Future<void>.delayed(settleDelay);
         return true;
       }
@@ -726,10 +739,28 @@ class ChatController extends Notifier<ChatState> {
       await Future<void>.delayed(pollInterval);
     }
 
+    final contact = state.knownContacts.cast<KnownContact?>().firstWhere(
+      (item) => item?.nodeId == nodeId,
+      orElse: () => null,
+    );
     return state.peers.any((peer) => peer.nodeId == nodeId) ||
+        (contact != null && _hasSingleOnlinePeerNamed(contact.displayName)) ||
         state.knownContacts.any(
           (contact) => contact.nodeId == nodeId && contact.isDirectlyConnected,
         );
+  }
+
+  bool _hasSingleOnlinePeerNamed(String displayName) {
+    final normalized = displayName.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    return state.peers
+            .where(
+              (peer) =>
+                  peer.nodeId != null &&
+                  peer.displayName.trim().toLowerCase() == normalized,
+            )
+            .length ==
+        1;
   }
 
   Future<void> stopMesh() async {
@@ -1467,15 +1498,23 @@ class ChatController extends Notifier<ChatState> {
   /// Marks the contact identified by [nodeId] as trusted.
   Future<void> trustContact(String nodeId) async {
     await _contactStore.trust(nodeId);
+    _refreshKnownContactsFromStore();
   }
 
   /// Removes trust for the contact identified by [nodeId].
   Future<void> untrustContact(String nodeId) async {
     await _contactStore.untrust(nodeId);
+    _refreshKnownContactsFromStore();
   }
 
   Future<void> setWalkieAlwaysOn(String nodeId, bool enabled) async {
     await _contactStore.setWalkieAlwaysOn(nodeId, enabled);
+    _refreshKnownContactsFromStore();
+    await publishWalkieAvailability(enabled);
+  }
+
+  void _refreshKnownContactsFromStore() {
+    state = state.copyWith(knownContacts: _contactStore.contacts);
   }
 
   /// Hides [messageId] from the current session view (in-memory only).
@@ -1526,6 +1565,19 @@ class ChatController extends Notifier<ChatState> {
   Future<void> setPublicWalkieStayOnline(bool enabled) async {
     await _publicWalkieStore.setStayOnlineEnabled(enabled);
     state = state.copyWith(publicWalkieStayOnline: enabled);
+    await publishWalkieAvailability(enabled);
+  }
+
+  /// Publishes a presence flag indicating whether this node can receive
+  /// private walkie sessions right now. This is included in key_announce
+  /// metadata so peers can show an appropriate online/away indicator.
+  Future<void> publishWalkieAvailability(bool available) async {
+    _lastPublishedWalkieAvailability = available;
+    try {
+      await _mesh.sendKeyAnnounce(extraMeta: {'walkieAvailable': available});
+    } catch (_) {
+      // Best-effort only.
+    }
   }
 
   Future<void> setShowOnlineOnly(bool enabled) async {

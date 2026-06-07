@@ -39,6 +39,10 @@ class KnownContact {
   /// are selected and online.
   final bool walkieAlwaysOn;
 
+  /// Whether the remote peer reports they can receive private walkie right now
+  /// (e.g. they are on the private walkie screen or have an availability flag).
+  final bool remoteWalkieAvailable;
+
   /// Whether this private chat is hidden from the default conversation list.
   ///
   /// Closing is local-only and does not remove message history.
@@ -55,6 +59,7 @@ class KnownContact {
     this.isBlocked = false,
     this.isTrusted = false,
     this.walkieAlwaysOn = false,
+    this.remoteWalkieAvailable = false,
     this.isChatClosed = false,
   });
 
@@ -72,6 +77,7 @@ class KnownContact {
     bool? isBlocked,
     bool? isTrusted,
     bool? walkieAlwaysOn,
+    bool? remoteWalkieAvailable,
     bool? isChatClosed,
   }) {
     return KnownContact(
@@ -87,6 +93,7 @@ class KnownContact {
       isBlocked: isBlocked ?? this.isBlocked,
       isTrusted: isTrusted ?? this.isTrusted,
       walkieAlwaysOn: walkieAlwaysOn ?? this.walkieAlwaysOn,
+      remoteWalkieAvailable: remoteWalkieAvailable ?? this.remoteWalkieAvailable,
       isChatClosed: isChatClosed ?? this.isChatClosed,
     );
   }
@@ -103,6 +110,7 @@ class KnownContact {
     'isBlocked': isBlocked,
     'isTrusted': isTrusted,
     'walkieAlwaysOn': walkieAlwaysOn,
+    'remoteWalkieAvailable': remoteWalkieAvailable,
     'isChatClosed': isChatClosed,
   };
 
@@ -116,6 +124,7 @@ class KnownContact {
     isBlocked: json['isBlocked'] as bool? ?? false,
     isTrusted: json['isTrusted'] as bool? ?? false,
     walkieAlwaysOn: json['walkieAlwaysOn'] as bool? ?? false,
+    remoteWalkieAvailable: json['remoteWalkieAvailable'] as bool? ?? false,
     isChatClosed: json['isChatClosed'] as bool? ?? false,
   );
 

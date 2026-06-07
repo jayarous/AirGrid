@@ -5,6 +5,7 @@ import 'package:airgrid/features/onboarding/onboarding_screen.dart';
 import 'package:airgrid/features/settings/profile_edit_screen.dart';
 import 'package:airgrid/features/settings/reports_screen.dart';
 import 'package:airgrid/features/settings/settings_screen.dart';
+import 'package:airgrid/features/settings/terms_safety_screen.dart';
 import 'package:airgrid/features/settings/trusted_contacts_screen.dart';
 import 'package:airgrid/features/walkie/walkie_screen.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +23,7 @@ class AppRouter {
   static const String profileEdit = '/settings/profile';
   static const String trustedContacts = '/settings/trusted';
   static const String reports = '/settings/reports';
+  static const String legal = '/settings/legal';
 
   static Route<dynamic> onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -68,6 +70,11 @@ class AppRouter {
       case reports:
         return MaterialPageRoute(
           builder: (_) => const ReportsScreen(),
+          settings: settings,
+        );
+      case legal:
+        return MaterialPageRoute(
+          builder: (_) => const TermsSafetyScreen(),
           settings: settings,
         );
       default:

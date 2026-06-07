@@ -8,6 +8,7 @@ import 'package:airgrid/data/storage/message_repository.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
+import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/walkie/walkie_screen.dart';
@@ -53,12 +54,11 @@ Future<LocalIdentityStore> _identity() async {
 }
 
 Future<void> _pumpWalkie(
-  WidgetTester tester,
-  {
-    FakeTransport? transport,
-    FakeForegroundService? foreground,
-  }
-) async {
+  WidgetTester tester, {
+  FakeTransport? transport,
+  FakeForegroundService? foreground,
+  KnownContactStore? knownContactStore,
+}) async {
   final fg = foreground ?? FakeForegroundService();
   final tx = transport ?? FakeTransport();
   addTearDown(fg.dispose);
@@ -74,7 +74,9 @@ Future<void> _pumpWalkie(
         ),
         foregroundServiceProvider.overrideWithValue(fg),
         cryptoServiceProvider.overrideWithValue(CryptoService()),
-        knownContactStoreProvider.overrideWithValue(InMemoryKnownContactStore()),
+        knownContactStoreProvider.overrideWithValue(
+          knownContactStore ?? InMemoryKnownContactStore(),
+        ),
         localReportStoreProvider.overrideWithValue(InMemoryLocalReportStore()),
         privacySettingsStoreProvider.overrideWithValue(
           InMemoryPrivacySettingsStore(),
@@ -90,16 +92,68 @@ Future<void> _pumpWalkie(
 }
 
 void main() {
+  testWidgets('fits compact screens without page scrolling', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 640);
+    addTearDown(() {
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
+    });
+
+    await _pumpWalkie(tester);
+
+    expect(tester.takeException(), isNull);
+    expect(
+      find.descendant(
+        of: find.byType(WalkieScreen),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is SingleChildScrollView &&
+              widget.scrollDirection == Axis.vertical,
+        ),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('shows no-target presence state by default', (tester) async {
     await _pumpWalkie(tester);
 
-    expect(find.text('CH-NO TARGET'), findsOneWidget);
-    expect(find.text('NO PRIVATE TARGET'), findsOneWidget);
+    expect(find.text('Private target'), findsOneWidget);
     expect(
-      find.text('Choose an online private peer before starting a session.'),
+      find.text('Choose someone nearby to start a private walkie.'),
       findsOneWidget,
     );
-    expect(find.text('CHOOSE TARGET'), findsOneWidget);
+    expect(find.text('Choose person'), findsOneWidget);
+    expect(find.text('CHOOSE SOMEONE'), findsOneWidget);
+  });
+
+  testWidgets('public walkie icon toggles public online state', (tester) async {
+    await _pumpWalkie(tester);
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(WalkieScreen)),
+    );
+    expect(
+      container.read(chatControllerProvider).publicWalkieStayOnline,
+      isFalse,
+    );
+
+    await tester.tap(find.byTooltip('Turn public walkie online'));
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(chatControllerProvider).publicWalkieStayOnline,
+      isTrue,
+    );
+
+    await tester.tap(find.byTooltip('Turn public walkie offline'));
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(chatControllerProvider).publicWalkieStayOnline,
+      isFalse,
+    );
   });
 
   testWidgets('shows selected private target name', (tester) async {
@@ -109,14 +163,16 @@ void main() {
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).selectConversation(
-      const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
-    );
+    container
+        .read(chatControllerProvider.notifier)
+        .selectConversation(
+          const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
+        );
     await tester.pump();
 
-    expect(find.text('CH-ALEX'), findsOneWidget);
-    expect(find.text('TARGET OFFLINE'), findsOneWidget);
-    expect(find.text('Alex is not online yet.'), findsOneWidget);
+    expect(find.text('Alex'), findsOneWidget);
+    expect(find.text('Alex is not online yet.'), findsWidgets);
+    expect(find.text('Invite'), findsOneWidget);
     expect(find.text('INVITE FIRST'), findsOneWidget);
   });
 
@@ -125,11 +181,7 @@ void main() {
   ) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    await _pumpWalkie(
-      tester,
-      transport: transport,
-      foreground: foreground,
-    );
+    await _pumpWalkie(tester, transport: transport, foreground: foreground);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
@@ -143,21 +195,25 @@ void main() {
     transport.connectPeer('endpoint-1', name: 'Alex', nodeId: 'peer-1');
     await tester.pump();
 
-    expect(find.text('ONLINE'), findsWidgets);
-    expect(find.text('TARGET ONLINE'), findsOneWidget);
-    expect(find.text('Tap the link button to invite Alex.'), findsOneWidget);
+    expect(find.text('Invite'), findsOneWidget);
+    expect(
+      find.text('Tap Invite to start a private session with Alex.'),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('renders walkie last error from controller state', (tester) async {
+  testWidgets('renders walkie last error from controller state', (
+    tester,
+  ) async {
     await _pumpWalkie(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).setWalkieLastError(
-      'Peer is not online',
-    );
+    container
+        .read(chatControllerProvider.notifier)
+        .setWalkieLastError('Peer is not online');
     await tester.pumpAndSettle();
 
     expect(find.text('Peer is not online'), findsOneWidget);
@@ -172,17 +228,15 @@ void main() {
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).setWalkieSending(
-      isSending: true,
-    );
+    container
+        .read(chatControllerProvider.notifier)
+        .setWalkieSending(isSending: true);
     await tester.pump();
 
-    final iconButtonFinder = find.ancestor(
-      of: find.byIcon(Icons.people_alt_outlined),
-      matching: find.byType(IconButton),
+    final chooseButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Choose person'),
     );
-    final iconButton = tester.widget<IconButton>(iconButtonFinder);
-    expect(iconButton.onPressed, isNull);
+    expect(chooseButton.onPressed, isNull);
   });
 
   testWidgets('choose target shows no-peers snackbar when list is empty', (
@@ -190,7 +244,7 @@ void main() {
   ) async {
     await _pumpWalkie(tester);
 
-    await tester.tap(find.byTooltip('Choose target'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Choose person'));
     await tester.pump();
 
     expect(find.text('No online private peers available yet.'), findsOneWidget);
@@ -199,11 +253,7 @@ void main() {
   testWidgets('invite action is shown for an online peer', (tester) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    await _pumpWalkie(
-      tester,
-      transport: transport,
-      foreground: foreground,
-    );
+    await _pumpWalkie(tester, transport: transport, foreground: foreground);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
@@ -212,9 +262,70 @@ void main() {
     transport.connectPeer('endpoint-1', name: 'Alex', nodeId: 'peer-1');
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Choose target'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Choose person'));
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(TextButton, 'Invite'), findsWidgets);
+    expect(find.widgetWithText(ElevatedButton, 'Invite'), findsWidgets);
+  });
+
+  testWidgets('private stay online shows and toggles always-on state', (
+    tester,
+  ) async {
+    final contactStore = InMemoryKnownContactStore();
+    await _pumpWalkie(tester, knownContactStore: contactStore);
+
+    await contactStore.upsert(
+      KnownContact(
+        nodeId: 'peer-1',
+        displayName: 'Alex',
+        publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        lastSeenAt: DateTime(2026),
+      ),
+    );
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(WalkieScreen)),
+    );
+    container
+        .read(chatControllerProvider.notifier)
+        .selectConversation(
+          const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
+        );
+    await tester.pumpAndSettle();
+
+    final stayOnlineButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Offline'),
+    );
+    expect(stayOnlineButton.onPressed, isNotNull);
+
+    var contact = contactStore.contacts.singleWhere(
+      (item) => item.nodeId == 'peer-1',
+    );
+    expect(contact.isTrusted, isFalse);
+    expect(contact.walkieAlwaysOn, isFalse);
+
+    await container
+        .read(chatControllerProvider.notifier)
+        .trustContact('peer-1');
+    await tester.pumpAndSettle();
+
+    final enabledButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Offline'),
+    );
+    expect(enabledButton.onPressed, isNotNull);
+
+    // Simulate the app missing a contact stream refresh before the user taps.
+    // The button should still flip because the controller refreshes its state
+    // directly after writing the private walkie setting.
+    await contactStore.setWalkieAlwaysOn('peer-1', false);
+    await tester.tap(find.widgetWithText(FilledButton, 'Offline'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(FilledButton, 'Online'), findsOneWidget);
+    contact = contactStore.contacts.singleWhere(
+      (item) => item.nodeId == 'peer-1',
+    );
+    expect(contact.isTrusted, isTrue);
+    expect(contact.walkieAlwaysOn, isTrue);
   });
 }

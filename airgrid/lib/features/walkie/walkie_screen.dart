@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/constants.dart';
@@ -8,6 +9,7 @@ import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/domain/models/media_attachment.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
+import 'package:airgrid/domain/models/privacy_mode.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
@@ -44,7 +46,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   Duration _elapsed = Duration.zero;
   String? _status;
   bool _channelDetentFlash = false;
-  bool _chatLaunchFlash = false;
   int _lastChannelWheelIndex = 0;
 
   /// When true the user is in open public-channel broadcast mode.
@@ -66,10 +67,38 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       parent: _speakerPulseController,
       curve: Curves.easeInOut,
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final s = ref.read(chatControllerProvider);
+      if (!s.meshStarted && !s.isMeshStarting) {
+        ref.read(chatControllerProvider.notifier).startMesh();
+      }
+      // Announce initial walkie availability for this screen (best-effort).
+      unawaited(ref
+          .read(chatControllerProvider.notifier)
+          .publishWalkieAvailability(!_isPublicMode));
+    });
   }
 
   @override
   void dispose() {
+    // Publish offline only when private stay-online is not latched.
+    final state = ref.read(chatControllerProvider);
+    final targetNodeId = _currentTargetNodeId();
+    final keepAvailable =
+        !_isPublicMode &&
+        targetNodeId != null &&
+        state.knownContacts.any(
+          (contact) =>
+              contact.nodeId == targetNodeId &&
+              contact.isTrusted &&
+              contact.walkieAlwaysOn,
+        );
+    unawaited(
+      ref
+          .read(chatControllerProvider.notifier)
+          .publishWalkieAvailability(keepAvailable),
+    );
     _channelDetentFlashTimer?.cancel();
     _ticker?.cancel();
     unawaited(_incomingPlayer?.dispose() ?? Future<void>.value());
@@ -130,8 +159,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
     final state = ref.read(chatControllerProvider);
     final selected = state.selectedConversation;
-    if (state.publicWalkieStayOnline ||
-        (selected is PrivateConversation &&
+    if ((_isPublicMode && state.publicWalkieStayOnline) ||
+        (!_isPublicMode &&
+            selected is PrivateConversation &&
             state.knownContacts.any(
               (contact) =>
                   contact.nodeId == selected.peerNodeId &&
@@ -268,6 +298,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   }
 
   Future<void> _invitePeer(MeshPeer peer) async {
+    if (await _requiresTrustedContactBeforeInvite(peer)) {
+      return;
+    }
+
     final ok = await ref
         .read(chatControllerProvider.notifier)
         .sendWalkieInvite(peer);
@@ -277,6 +311,51 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           ? 'Invite sent to ${peer.displayName}'
           : 'Failed to send invite';
     });
+  }
+
+  Future<bool> _requiresTrustedContactBeforeInvite(MeshPeer peer) async {
+    final nodeId = peer.nodeId;
+    if (nodeId == null) return false;
+
+    final state = ref.read(chatControllerProvider);
+    if (state.privacyMode != PrivacyMode.trustedContactsOnly ||
+        state.trustedNodeIds.contains(nodeId)) {
+      return false;
+    }
+
+    if (!mounted) return true;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final controller = ref.read(chatControllerProvider.notifier);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          'Add ${peer.displayName} to Invited Friends before starting private walkie.',
+        ),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 5),
+        action: SnackBarAction(
+          label: 'Add',
+          onPressed: () async {
+            await controller.trustContact(nodeId);
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Added to invited friends'),
+                behavior: SnackBarBehavior.floating,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    setState(() {
+      _status = 'Add ${peer.displayName} to Invited Friends first';
+    });
+    return true;
   }
 
   Future<void> _autoStartPrivateWalkieIfEnabled(
@@ -317,39 +396,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       return;
     }
 
-    final selectedNodeId = await showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(title: Text('Choose walkie target')),
-            for (final peer in candidates)
-              ListTile(
-                leading: Icon(
-                  Icons.person,
-                  color: peer.nodeId != null ? Colors.green : null,
-                ),
-                title: Text(peer.displayName),
-                subtitle: Text(
-                  peer.nodeId ?? '',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: peer.nodeId != null
-                    ? TextButton(
-                        onPressed: () =>
-                            Navigator.of(ctx).pop('invite:${peer.nodeId}'),
-                        child: const Text('Invite'),
-                      )
-                    : const Text('Offline'),
-                onTap: () => Navigator.of(ctx).pop(peer.nodeId),
-              ),
-          ],
-        ),
-      ),
-    );
-
+    final selectedNodeId = await _showChooseTargetSheet(candidates);
     if (selectedNodeId == null) return;
 
     if (selectedNodeId.startsWith('invite:')) {
@@ -384,6 +431,194 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         peerName: selectedPeer.displayName,
       ),
     );
+  }
+
+  Future<String?> _showChooseTargetSheet(List<MeshPeer> candidates) {
+    return showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF0E1620),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 48,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Choose walkie target',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    color: Colors.white70,
+                    onPressed: () => Navigator.of(ctx).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Pick an online AirGrid peer to invite for a private walkie session.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+              ),
+              const SizedBox(height: 14),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 380),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: candidates.length,
+                  separatorBuilder: (_, __) => const Divider(
+                    color: Colors.white10,
+                    height: 0,
+                    indent: 72,
+                  ),
+                  itemBuilder: (ctx, index) {
+                    final peer = candidates[index];
+                    return Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () => Navigator.of(ctx).pop(peer.nodeId),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                            horizontal: 8,
+                          ),
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 22,
+                                backgroundColor: Colors.white12,
+                                child: const Icon(
+                                  Icons.person,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      peer.displayName,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      peer.nodeId ?? '',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(color: Colors.white60),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFF4D35E),
+                                  foregroundColor: Colors.black,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  elevation: 0,
+                                  minimumSize: const Size(72, 36),
+                                ),
+                                onPressed: () => Navigator.of(
+                                  ctx,
+                                ).pop('invite:${peer.nodeId}'),
+                                child: const Text('Invite'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAcceptInviteDialog(MeshPeer invitePeer) async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F1724),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Text('Accept walkie invite'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Incoming private walkie invite from ${invitePeer.displayName}.',
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(Icons.person_pin, color: Color(0xFFF4D35E)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    invitePeer.displayName,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFF4D35E),
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Accept invite'),
+          ),
+        ],
+      ),
+    );
+    if (accepted == true) {
+      await ref.read(chatControllerProvider.notifier).acceptWalkieInvite();
+    }
   }
 
   Future<void> _startHoldRecording() async {
@@ -660,6 +895,89 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         throw const _WalkieSendException('Peer is not online');
       }
 
+      // Ensure the remote peer has advertised they can receive private walkie.
+      final selectedContact = refreshedState.knownContacts
+          .cast<KnownContact?>()
+          .firstWhere((c) => c?.nodeId == conv.peerNodeId, orElse: () => null);
+      if (selectedContact != null && !(selectedContact.remoteWalkieAvailable)) {
+        // Offer to navigate to chat instead of sending audio.
+        if (!mounted) return;
+        final choice = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF0F1724),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            title: Text(
+              'Receiver unavailable',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'The receiver\'s walkie appears to be offline.',
+                  style: TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(Icons.person_pin, color: Color(0xFFF4D35E)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        peer.displayName ?? '',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Send a text instead to ask them to come/stay online?',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('OK'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFF4D35E),
+                  foregroundColor: Colors.black,
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Chat'),
+              ),
+            ],
+          ),
+        );
+
+        // Reset sending state and optionally navigate to chat.
+        ref.read(chatControllerProvider.notifier).setWalkieSending(isSending: false);
+        ref.read(chatControllerProvider.notifier).setWalkieLastError('Receiver walkie offline');
+
+        // Delete the recorded file since we're not sending it now.
+        try {
+          final f = File(recordedPath);
+          if (await f.exists()) await f.delete();
+        } catch (_) {
+          // ignore
+        }
+
+        if (choice == true) {
+          // Select the private conversation and open chat.
+          controller.selectConversation(PrivateConversation(peerNodeId: conv.peerNodeId, peerName: peer.displayName));
+          await Navigator.of(context).pushNamed(AppRouter.chat);
+        }
+
+        return;
+      }
+
       final result = await controller.sendPrivateAudio(
         peer,
         payload,
@@ -717,6 +1035,283 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   static const Color _radioAmber = Color(0xFFFFA126);
   static const Color _radioShell = Color(0xFF343A41);
   static const Color _radioShellDark = Color(0xFF1B1E24);
+  static const Color _meshOffFill = Color(0xFF2A3038);
+  static const Color _meshOffBorder = Color(0xFF545B66);
+  static const Color _meshOffForeground = Color(0xFFB6BDC7);
+
+  Widget _buildMeshControlDeck({
+    required bool meshStarted,
+    required bool isMeshStarting,
+    required bool isAdvertising,
+    required bool isDiscovering,
+    required bool playServicesAvailable,
+    required int peerCount,
+    required bool isDisabled,
+  }) {
+    final controller = ref.read(chatControllerProvider.notifier);
+    final meshBusy = isMeshStarting || isDisabled;
+    final controlsEnabled = meshStarted && playServicesAvailable && !meshBusy;
+
+    void showSnack(String msg) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+
+    // Shared style helpers
+    Widget buildLedDot(bool lit) {
+      final color = lit ? Colors.greenAccent.shade200 : Colors.grey.shade700;
+      return Container(
+        width: 6,
+        height: 6,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color,
+          boxShadow: lit
+              ? [
+                  BoxShadow(
+                    color: Colors.greenAccent.withAlpha(160),
+                    blurRadius: 6,
+                  ),
+                ]
+              : null,
+        ),
+      );
+    }
+
+    Widget buildDeckButton({
+      required String label,
+      required bool isLatched,
+      required bool enabled,
+      required VoidCallback? onTap,
+    }) {
+      final isOn = isLatched && enabled;
+      final fg = isOn
+          ? Colors.greenAccent.shade200
+          : enabled
+          ? _meshOffForeground
+          : Colors.white24;
+      return GestureDetector(
+        onTap: enabled ? onTap : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            color: isOn ? const Color(0xFF0D2010) : _meshOffFill,
+            border: Border.all(
+              color: isOn
+                  ? Colors.greenAccent.withAlpha(80)
+                  : _meshOffBorder.withAlpha(enabled ? 150 : 60),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(80),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              buildLedDot(isOn),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 10,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.0,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // PWR knob-style button
+    final pwrActive = meshStarted || isMeshStarting;
+    final pwrColor = pwrActive ? _radioAmber : _meshOffForeground;
+    Widget buildPwrButton() {
+      return GestureDetector(
+        onTap: isMeshStarting
+            ? null
+            : () {
+                _triggerButtonFeedback();
+                if (meshStarted) {
+                  controller.stopMesh();
+                } else {
+                  controller.startMesh();
+                }
+              },
+        child: Container(
+          width: 54,
+          height: 54,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: pwrActive ? const Color(0xFF171B21) : _meshOffFill,
+            border: Border.all(
+              color: pwrActive
+                  ? _radioAmber.withAlpha(160)
+                  : _meshOffBorder.withAlpha(150),
+              width: 1.5,
+            ),
+            boxShadow: [
+              if (pwrActive)
+                BoxShadow(
+                  color: _radioAmber.withAlpha(90),
+                  blurRadius: 12,
+                  spreadRadius: 2,
+                ),
+              BoxShadow(
+                color: Colors.black.withAlpha(100),
+                blurRadius: 6,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.power_settings_new,
+                size: 20,
+                color: isMeshStarting ? _radioAmber.withAlpha(140) : pwrColor,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'PWR',
+                style: TextStyle(
+                  color: isMeshStarting ? _radioAmber.withAlpha(180) : pwrColor,
+                  fontSize: 9,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.0,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // PEERS LCD badge
+    final peersColor = peerCount > 0
+        ? Colors.greenAccent.shade200
+        : _radioAmber;
+    Widget buildPeersBadge() {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: const Color(0xFF0A0D10),
+          border: Border.all(color: _radioAmber.withAlpha(50)),
+          boxShadow: [
+            BoxShadow(
+              color: _radioAmber.withAlpha(20),
+              blurRadius: 8,
+              spreadRadius: 1,
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              peerCount.toString().padLeft(2, '0'),
+              style: TextStyle(
+                color: peersColor,
+                fontSize: 16,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w700,
+                shadows: [
+                  Shadow(color: peersColor.withAlpha(160), blurRadius: 8),
+                ],
+              ),
+            ),
+            Text(
+              'PEERS',
+              style: TextStyle(
+                color: peersColor.withAlpha(180),
+                fontSize: 9,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: const Color(0xFF0E1116),
+        border: Border.all(color: Colors.white.withAlpha(18)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(80),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          buildPwrButton(),
+          const SizedBox(width: 8),
+          buildDeckButton(
+            label: 'SCAN',
+            isLatched: isDiscovering,
+            enabled: controlsEnabled,
+            onTap: () {
+              _triggerButtonFeedback();
+              final next = !isDiscovering;
+              controller.setDiscoveryEnabled(next);
+              if (next) showSnack('Scanning for nearby AirGrid users');
+            },
+          ),
+          const SizedBox(width: 6),
+          buildDeckButton(
+            label: 'AVAIL',
+            isLatched: isAdvertising,
+            enabled: controlsEnabled,
+            onTap: () {
+              _triggerButtonFeedback();
+              final next = !isAdvertising;
+              controller.setAdvertisingEnabled(next);
+              if (next) {
+                showSnack('Other AirGrid users nearby can find you');
+              }
+            },
+          ),
+          const SizedBox(width: 6),
+          buildDeckButton(
+            label: 'SYNC',
+            isLatched: false,
+            enabled: meshStarted && !isMeshStarting && !isDisabled,
+            onTap: () {
+              _triggerButtonFeedback();
+              controller.startMesh(forceRestart: true);
+            },
+          ),
+          const SizedBox(width: 8),
+          buildPeersBadge(),
+        ],
+      ),
+    );
+  }
 
   Widget _buildHardwareHeader({
     required bool isPublicMode,
@@ -1334,6 +1929,629 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
   }
 
+  Widget _buildStatusCard({
+    required bool meshStarted,
+    required bool isMeshStarting,
+    required bool isAdvertising,
+    required bool isDiscovering,
+    required bool playServicesAvailable,
+    required int peerCount,
+    required VoidCallback? onToggleMesh,
+    required VoidCallback? onToggleAdvertising,
+    required VoidCallback? onToggleDiscovering,
+    required VoidCallback? onRefreshPeers,
+  }) {
+    const cardSurface = Color(0xFF18212B);
+    const cardSurfaceStrong = Color(0xFF222C38);
+    final online = meshStarted && playServicesAvailable;
+    const onlineIconBackground = Color(0xFFDCFCE7);
+    const onlineIconColor = Color(0xFF16A34A);
+    final meshIconBackground = online ? onlineIconBackground : _meshOffFill;
+    final meshIconColor = online ? onlineIconColor : _meshOffForeground;
+    final meshButtonBackground = online || isMeshStarting
+        ? cardSurfaceStrong
+        : _meshOffFill;
+    final meshButtonBorder = online || isMeshStarting
+        ? Colors.white12
+        : _meshOffBorder.withAlpha(150);
+    final title = online ? 'Mesh Online' : 'Mesh Offline';
+    final subtitle = !playServicesAvailable
+        ? 'AirGrid needs Google Play Services to go online.'
+        : isMeshStarting
+        ? 'Please wait while the mesh starts.'
+        : !meshStarted
+        ? 'Start mesh to connect to nearby peers.'
+        : 'Nearby peers are ready to receive walkie audio.';
+
+    Widget metricChip({
+      required IconData icon,
+      required String label,
+      required bool active,
+      required Color color,
+      VoidCallback? onTap,
+    }) {
+      final labelColor = active ? color : Colors.white54;
+      final iconColor = active ? color : Colors.white38;
+      final backgroundColor = active ? color.withAlpha(40) : cardSurface;
+      final borderColor = active ? color.withAlpha(100) : Colors.white12;
+
+      return Material(
+        color: cardSurface,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final showLabel = constraints.maxWidth >= 92;
+              return Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: showLabel ? 12 : 8,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  color: backgroundColor,
+                  border: Border.all(color: borderColor),
+                  boxShadow: active
+                      ? [
+                          BoxShadow(
+                            color: color.withAlpha(18),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3),
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(icon, size: 16, color: iconColor),
+                    if (showLabel) ...[
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: labelColor,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withAlpha(20)),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF131A23), Color(0xFF0B1017)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(80),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: meshIconBackground,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  online ? Icons.hub_rounded : Icons.hub_outlined,
+                  color: meshIconColor,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                decoration: BoxDecoration(
+                  color: meshButtonBackground,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: meshButtonBorder),
+                ),
+                child: IconButton(
+                  onPressed: isMeshStarting ? null : onToggleMesh,
+                  tooltip: meshStarted ? 'Stop mesh' : 'Start mesh',
+                  color: online ? Colors.white : _meshOffForeground,
+                  icon: isMeshStarting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          meshStarted ? Icons.power_settings_new : Icons.wifi,
+                        ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final chipWidth = (constraints.maxWidth - 16) / 3;
+              return Row(
+                children: [
+                  SizedBox(
+                    width: chipWidth,
+                    child: metricChip(
+                      icon: Icons.people_outline,
+                      label: '$peerCount peer${peerCount == 1 ? '' : 's'}',
+                      active: online && peerCount > 0,
+                      color: Colors.tealAccent.shade200,
+                      onTap: onRefreshPeers,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: chipWidth,
+                    child: metricChip(
+                      icon: Icons.campaign_outlined,
+                      label: online ? 'Available' : 'Offline',
+                      active: online && isAdvertising,
+                      color: Colors.greenAccent.shade200,
+                      onTap: online ? onToggleAdvertising : null,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: chipWidth,
+                    child: metricChip(
+                      icon: Icons.search,
+                      label: online ? 'Scanning' : 'Idle',
+                      active: online && isDiscovering,
+                      color: const Color(0xFFFFB347),
+                      onTap: online ? onToggleDiscovering : null,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          if (!playServicesAvailable ||
+              (!meshStarted && onToggleMesh != null)) ...[
+            const SizedBox(height: 14),
+            FilledButton.tonal(
+              onPressed: playServicesAvailable ? onToggleMesh : null,
+              style: FilledButton.styleFrom(
+                backgroundColor: meshStarted
+                    ? const Color(0xFF1D2630)
+                    : _meshOffFill,
+                foregroundColor: meshStarted
+                    ? Colors.white
+                    : _meshOffForeground,
+                disabledBackgroundColor: _meshOffFill,
+                disabledForegroundColor: _meshOffForeground.withAlpha(150),
+              ),
+              child: Text(meshStarted ? 'Mesh running' : 'Start mesh'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModeSelector({
+    required bool isPublicMode,
+    required VoidCallback onPrivate,
+    required VoidCallback onPublic,
+  }) {
+    Widget buildButton({
+      required String label,
+      required bool selected,
+      required IconData icon,
+      required VoidCallback onTap,
+    }) {
+      return AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: selected
+              ? const LinearGradient(
+                  colors: [Color(0xFFFFA126), Color(0xFFFFB84D)],
+                )
+              : null,
+          color: selected ? null : Colors.black.withAlpha(70),
+          border: Border.all(
+            color: selected ? Colors.transparent : Colors.white24,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: _radioAmber.withAlpha(120),
+                    blurRadius: 12,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(14),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    icon,
+                    size: 18,
+                    color: selected ? Colors.black : Colors.white70,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: selected ? Colors.black : Colors.white70,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          child: buildButton(
+            label: 'Private',
+            selected: !isPublicMode,
+            icon: Icons.lock_outline,
+            onTap: onPrivate,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: buildButton(
+            label: 'Public',
+            selected: isPublicMode,
+            icon: Icons.campaign_outlined,
+            onTap: onPublic,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTargetCard({
+    required bool isPublicMode,
+    required bool hasTarget,
+    required String targetName,
+    required bool isTargetOnline,
+    required bool canReceivePrivate,
+    required bool isHolding,
+    required bool isSending,
+    required VoidCallback onChooseTarget,
+  }) {
+    final caption = isPublicMode
+        ? 'Broadcast to nearby AirGrid users.'
+        : hasTarget
+        ? targetName
+        : 'No private target selected';
+    final description = isPublicMode
+      ? 'Hold to broadcast when mesh is running.'
+      : hasTarget
+      ? isTargetOnline
+          ? (canReceivePrivate
+            ? '$targetName is online and ready to talk.'
+            : '$targetName is online but away from the private walkie screen.')
+          : '$targetName is not online yet.'
+      : 'Choose someone nearby to start a private walkie.';
+    final badgeColor = isPublicMode
+      ? _radioAmber
+      : isTargetOnline
+      ? (canReceivePrivate ? const Color(0xFF57D163) : _radioAmber)
+      : Colors.white60;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF10151D),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withAlpha(18)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(60),
+            blurRadius: 10,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  isPublicMode ? 'Public channel' : 'Private target',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    letterSpacing: 1.1,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: badgeColor.withAlpha(24),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: badgeColor.withAlpha(80)),
+                ),
+                child: Text(
+                  isPublicMode
+                      ? 'Open'
+                      : isTargetOnline
+                      ? 'Online'
+                      : 'Offline',
+                  style: TextStyle(
+                    color: badgeColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            caption,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            description,
+            style: TextStyle(
+              color: Colors.white.withAlpha(190),
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
+          if (!isPublicMode) ...[
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: isHolding || isSending ? null : onChooseTarget,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1D2630),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFF232B36),
+                disabledForegroundColor: Colors.white38,
+              ),
+              child: const Text('Choose person'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSessionActionCard({
+    required bool isPublicMode,
+    required bool meshStarted,
+    required bool isMeshStarting,
+    required bool playServicesAvailable,
+    required bool hasTarget,
+    required bool isTargetOnline,
+    required bool isActiveSessionForTarget,
+    required bool isIncomingInvite,
+    required bool isOutgoingInviteForTarget,
+    required VoidCallback? onAcceptInvite,
+    required VoidCallback? onCancelInvite,
+    required VoidCallback? onEndSession,
+    required VoidCallback? onInvite,
+    required VoidCallback? onStartMesh,
+  }) {
+    String label;
+    VoidCallback? onPressed;
+    var enabled = false;
+    var useActiveStyle = false;
+    if (isPublicMode) {
+      if (!playServicesAvailable) {
+        label = 'Play Services unavailable';
+      } else if (isMeshStarting) {
+        label = 'Starting...';
+        useActiveStyle = true;
+      } else if (!meshStarted) {
+        label = 'Start mesh';
+        enabled = onStartMesh != null;
+        onPressed = onStartMesh;
+      } else {
+        label = 'Public broadcast ready';
+        useActiveStyle = true;
+      }
+    } else if (isIncomingInvite) {
+      label = 'Accept invite';
+      enabled = onAcceptInvite != null;
+      onPressed = onAcceptInvite;
+      useActiveStyle = enabled;
+    } else if (isOutgoingInviteForTarget) {
+      label = 'Cancel invite';
+      enabled = onCancelInvite != null;
+      onPressed = onCancelInvite;
+      useActiveStyle = enabled;
+    } else if (isActiveSessionForTarget) {
+      label = 'End session';
+      enabled = onEndSession != null;
+      onPressed = onEndSession;
+      useActiveStyle = enabled;
+    } else if (hasTarget) {
+      label = 'Invite';
+      enabled = isTargetOnline && onInvite != null;
+      onPressed = enabled ? onInvite : null;
+      useActiveStyle = enabled;
+    } else {
+      label = 'Choose someone';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FilledButton(
+          onPressed: enabled ? onPressed : null,
+          style: FilledButton.styleFrom(
+            backgroundColor: useActiveStyle ? _radioAmber : _meshOffFill,
+            foregroundColor: useActiveStyle ? Colors.black : _meshOffForeground,
+            disabledBackgroundColor: Colors.white10,
+            disabledForegroundColor: Colors.white70,
+            elevation: enabled ? 2 : 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+        if (isIncomingInvite && onCancelInvite != null) ...[
+          const SizedBox(height: 10),
+          OutlinedButton(
+            onPressed: onCancelInvite,
+            child: const Text('Decline invite'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSecondaryActions({
+    required bool isHolding,
+    required bool isSending,
+    required bool stayOnlineOn,
+    required bool stayOnlineEnabled,
+    required String stayOnlineHint,
+    required VoidCallback? onOpenChat,
+    required VoidCallback? onToggleStayOnline,
+  }) {
+    final stayOnlineIconColor = stayOnlineOn
+        ? Colors.green.shade600
+        : Colors.grey.shade500;
+    final stayOnlineBorderColor = stayOnlineOn
+        ? Colors.green.shade600.withAlpha(150)
+        : Colors.white.withAlpha(30);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: isHolding || isSending ? null : onOpenChat,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1D2630),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF232B36),
+                  disabledForegroundColor: Colors.white38,
+                ),
+                icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                label: const Text('Chat'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: stayOnlineEnabled ? onToggleStayOnline : null,
+                style: FilledButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  backgroundColor: const Color(0xFF1A212B),
+                  disabledBackgroundColor: const Color(0xFF141920),
+                  disabledForegroundColor: Colors.white38,
+                  side: BorderSide(color: stayOnlineBorderColor),
+                ),
+                icon: Icon(
+                  Icons.wifi_tethering_rounded,
+                  size: 18,
+                  color: stayOnlineEnabled
+                      ? stayOnlineIconColor
+                      : Colors.grey.shade700,
+                ),
+                label: Text(
+                  stayOnlineOn ? 'Online' : 'Offline',
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          stayOnlineHint,
+          style: TextStyle(
+            color: Colors.white.withAlpha(180),
+            fontSize: 13,
+            height: 1.4,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildSignalBars({required int onlineCount}) {
     final level = onlineCount <= 0
         ? 0
@@ -1617,7 +2835,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                     color: isEnabled ? _radioAmber : Colors.white70,
                     fontFamily: 'monospace',
                     fontSize: size * 0.058,
-                    letterSpacing: 1.0,
+                    letterSpacing: 0.9,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -1636,6 +2854,51 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildWalkieBackdrop() {
+    return IgnorePointer(
+      child: Stack(
+        children: [
+          Positioned(
+            top: -130,
+            left: -100,
+            child: Container(
+              width: 260,
+              height: 260,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFFFFA126).withAlpha(28),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 220,
+            right: -90,
+            child: Container(
+              width: 240,
+              height: 240,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF57D163).withAlpha(22),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -120,
+            left: 30,
+            child: Container(
+              width: 220,
+              height: 220,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withAlpha(10),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1673,12 +2936,11 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         ? selected.peerNodeId
         : state.walkiePeerNodeId;
     final hasTarget = targetNodeId != null && targetNodeId.isNotEmpty;
-    final isTargetOnline =
-        hasTarget && state.peers.any((p) => p.nodeId == targetNodeId);
     final targetName = selected is PrivateConversation
         ? selected.peerName
-        : 'No private target selected';
-    final invitePeer = _peerByNodeId(state.walkieInvitePeerNodeId);
+        : 'Private target';
+    final isTargetOnline =
+        hasTarget && state.peers.any((p) => p.nodeId == targetNodeId);
     final isIncomingInvite = state.walkieInviteIsIncoming;
     final isActiveSessionForTarget = _isPublicMode
         ? state.meshStarted
@@ -1689,120 +2951,46 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         hasTarget &&
         state.walkieInvitePeerNodeId == targetNodeId &&
         !isActiveSessionForTarget;
-    final pingEnabled = !(isHolding || isSending) && !_isPublicMode;
-    final pingDotColor = _isPublicMode
-        ? Colors.grey.shade500
-        : isActiveSessionForTarget
-        ? Colors.greenAccent.shade200
-        : isOutgoingInviteForTarget
-        ? Colors.redAccent.shade100
-        : (hasTarget && isTargetOnline)
-        ? _radioAmber
-        : Colors.grey.shade500;
-    final theme = Theme.of(context);
-    final selectedPrivateContact = selected is PrivateConversation
-        ? state.knownContacts.cast<KnownContact?>().firstWhere(
-            (item) => item?.nodeId == selected.peerNodeId,
-            orElse: () => null,
-          )
-        : null;
+    final selectedPrivateContact = !_isPublicMode && hasTarget
+      ? state.knownContacts.cast<KnownContact?>().firstWhere(
+        (item) => item?.nodeId == targetNodeId,
+        orElse: () => null,
+        )
+      : null;
     final privateStayOnlineEligible =
-        selected is PrivateConversation &&
-        selectedPrivateContact != null &&
-        selectedPrivateContact.isTrusted;
+      selectedPrivateContact != null && selectedPrivateContact.isTrusted;
     final stayOnlineOn = _isPublicMode
         ? state.publicWalkieStayOnline
         : (selectedPrivateContact?.walkieAlwaysOn ?? false);
-    final stayOnlineEnabled =
-        !(isHolding || isSending) &&
-        (_isPublicMode || privateStayOnlineEligible);
+    final stayOnlineEnabled = !(isHolding || isSending) && (_isPublicMode || hasTarget);
     final stayOnlineHint = _isPublicMode
         ? 'Keep receiving public walkie voice across screens.'
-        : selected is! PrivateConversation
+      : !hasTarget
         ? 'Select a private target to enable stay online.'
         : privateStayOnlineEligible
         ? 'Latches always-on walkie for this trusted friend.'
         : 'Trust this friend first to enable private stay online.';
-    final privateAlwaysOnCount = state.knownContacts
-        .where((contact) => contact.isTrusted && contact.walkieAlwaysOn)
-        .length;
-    final alwaysOnlineChannelParts = <String>[];
-    if (state.publicWalkieStayOnline) {
-      alwaysOnlineChannelParts.add('CH-07 PUBLIC');
-    }
-    if (privateAlwaysOnCount > 0) {
-      final suffix = privateAlwaysOnCount > 1 ? ' ($privateAlwaysOnCount)' : '';
-      alwaysOnlineChannelParts.add('CH-01 PRIVATE$suffix');
-    }
-    final alwaysOnlineLabel = alwaysOnlineChannelParts.isEmpty
-        ? null
-        : alwaysOnlineChannelParts.join('  •  ');
+    final targetPeer = hasTarget ? _peerByNodeId(targetNodeId) : null;
     final speakerActive =
         isHolding ||
         isSending ||
         (_status?.startsWith('Incoming walkie') ?? false);
     _syncSpeakerPulse(speakerActive);
-
-    final callLabel = _isPublicMode
-        ? 'CH-PUBLIC MESH'
-        : (hasTarget ? 'CH-${targetName.toUpperCase()}' : 'CH-NO TARGET');
-    final onlinePrivatePeers = state.peers
-        .where((peer) => peer.nodeId != null)
-        .toList(growable: false);
-    final channelEntries = <_ChannelWheelEntry>[
-      for (var i = 0; i < onlinePrivatePeers.length; i++)
-        _ChannelWheelEntry(
-          number: i + 1,
-          displayName: onlinePrivatePeers[i].displayName,
-          isPublic: false,
-          peerNodeId: onlinePrivatePeers[i].nodeId,
-          peerName: onlinePrivatePeers[i].displayName,
-        ),
-      if (onlinePrivatePeers.isEmpty)
-        const _ChannelWheelEntry(
-          number: 1,
-          displayName: 'PRIVATE LINK',
-          isPublic: false,
-        ),
-      const _ChannelWheelEntry(
-        number: 7,
-        displayName: 'PUBLIC MESH',
-        isPublic: true,
-      ),
-    ];
-    final selectedChannelIndex = _isPublicMode
-        ? channelEntries.indexWhere((entry) => entry.isPublic)
-        : (() {
-            final nodeId = targetNodeId;
-            if (nodeId == null || nodeId.isEmpty) return 0;
-            final idx = channelEntries.indexWhere(
-              (entry) => !entry.isPublic && entry.peerNodeId == nodeId,
-            );
-            return idx >= 0 ? idx : 0;
-          })();
-    final selectedEntry = channelEntries[selectedChannelIndex];
-    final selectedChannelDescription = selectedEntry.isPublic
-        ? 'Channel 07: Open broadcast'
-        : selectedEntry.peerNodeId == null
-        ? 'Channel 01: Paired private session'
-        : 'Channel ${selectedEntry.number.toString().padLeft(2, '0')}: ${selectedEntry.displayName}';
-    final linkStatusLabel = _isPublicMode
-        ? (state.meshStarted
-              ? 'PUBLIC BROADCAST READY'
-              : 'PUBLIC CHANNEL OFFLINE')
-        : !hasTarget
-        ? 'NO PRIVATE TARGET'
-        : isActiveSessionForTarget
-        ? 'PRIVATE SESSION ACTIVE'
-        : isOutgoingInviteForTarget
-        ? 'INVITE SENT'
-        : isTargetOnline
-        ? 'TARGET ONLINE'
-        : 'TARGET OFFLINE';
+    final controller = ref.read(chatControllerProvider.notifier);
     final actionHintLabel = _isPublicMode
-        ? (state.meshStarted
-              ? 'Hold the mic to broadcast to nearby public peers.'
-              : 'Start the mesh before using the public walkie channel.')
+        ? (!state.playServicesAvailable
+              ? 'Play Services is unavailable on this device.'
+              : state.isMeshStarting
+              ? 'Mesh is starting up, please wait...'
+              : !state.meshStarted
+              ? 'Tap Start mesh to go online.'
+              : state.peers.isEmpty
+              ? 'Scanning for nearby AirGrid users.'
+              : 'Hold the mic to broadcast to nearby public peers.')
+        : state.isMeshStarting
+        ? 'Mesh is starting up, please wait...'
+        : !state.meshStarted
+        ? 'Start mesh to use walkie.'
         : !hasTarget
         ? 'Choose an online private peer before starting a session.'
         : isActiveSessionForTarget
@@ -1810,7 +2998,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         : isOutgoingInviteForTarget
         ? 'Waiting for $targetName to accept your walkie invite.'
         : isTargetOnline
-        ? 'Tap the link button to invite $targetName.'
+        ? 'Tap Invite to start a private session with $targetName.'
         : '$targetName is not online yet.';
     final pttIdleLabel = isActiveSessionForTarget
         ? 'HOLD TO TALK'
@@ -1818,294 +3006,277 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         ? 'START MESH'
         : hasTarget
         ? 'INVITE FIRST'
-        : 'CHOOSE TARGET';
+        : 'CHOOSE SOMEONE';
 
     return Scaffold(
       backgroundColor: const Color(0xFF07090D),
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        foregroundColor: Colors.white,
+        iconTheme: const IconThemeData(color: Colors.white),
+        titleTextStyle: Theme.of(context).textTheme.headlineSmall?.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
+        ),
         title: const Text('Walkie Talkie'),
-        actions: [
-          const PublicWalkieStatusIcon(),
-          IconButton(
-            tooltip: 'Choose target',
-            onPressed: isHolding || isSending ? null : _chooseTarget,
-            icon: const Icon(Icons.people_alt_outlined),
-          ),
-        ],
+        actions: [const PublicWalkieStatusIcon()],
       ),
-      body: SafeArea(
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment(0, -0.75),
-              radius: 1.25,
-              colors: [Color(0xFF10151D), Color(0xFF06080D)],
-            ),
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final uiScale = 1.0;
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(child: _buildWalkieBackdrop()),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                const padding = EdgeInsets.fromLTRB(16, 12, 16, 24);
+                final contentWidth = math.min(
+                  560.0,
+                  math.max(0.0, constraints.maxWidth - padding.horizontal),
+                );
 
-              final shellPadding = 14.0 * uiScale;
-              final controlSectionHeight = 190.0 * uiScale;
-              final pttSize = 238.0 * uiScale;
-              final sectionGap = 14.0 * uiScale;
-              final statusGap = 16.0 * uiScale;
-
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
-                child: Center(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.topCenter,
+                return Padding(
+                  padding: padding,
+                  child: Center(
                     child: SizedBox(
-                      width: 460,
-                      child: Container(
-                        padding: EdgeInsets.all(shellPadding),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(color: Colors.white.withAlpha(20)),
-                          gradient: const LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [_radioShell, _radioShellDark],
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withAlpha(110),
-                              blurRadius: 26,
-                              offset: const Offset(0, 14),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _buildHardwareHeader(
-                              isPublicMode: _isPublicMode,
-                              peerCount: state.peers.length,
-                              isActive: isActiveSessionForTarget,
-                            ),
-                            SizedBox(height: sectionGap),
-                            _buildChannelSelector(
-                              isLocked: isHolding || isSending,
-                              entries: channelEntries,
-                              selectedIndex: selectedChannelIndex,
-                              selectedDescription: selectedChannelDescription,
-                              onSelectIndex: (index) {
-                                final selected = channelEntries[index];
-                                if (selected.isPublic) {
-                                  if (_isPublicMode) return;
+                      width: contentWidth,
+                      height: math.max(
+                        0.0,
+                        constraints.maxHeight - padding.vertical,
+                      ),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.topCenter,
+                        child: SizedBox(
+                          width: contentWidth,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _buildStatusCard(
+                                meshStarted: state.meshStarted,
+                                isMeshStarting: state.isMeshStarting,
+                                isAdvertising: state.isAdvertising,
+                                isDiscovering: state.isDiscovering,
+                                playServicesAvailable:
+                                    state.playServicesAvailable,
+                                peerCount: state.peers.length,
+                                onToggleMesh: state.playServicesAvailable
+                                    ? () => unawaited(
+                                        state.meshStarted
+                                            ? controller.stopMesh()
+                                            : controller.startMesh(),
+                                      )
+                                    : null,
+                                onToggleAdvertising:
+                                    state.playServicesAvailable &&
+                                        state.meshStarted
+                                    ? () => unawaited(
+                                        controller.setAdvertisingEnabled(
+                                          !state.isAdvertising,
+                                        ),
+                                      )
+                                    : null,
+                                onToggleDiscovering:
+                                    state.playServicesAvailable &&
+                                        state.meshStarted
+                                    ? () => unawaited(
+                                        controller.setDiscoveryEnabled(
+                                          !state.isDiscovering,
+                                        ),
+                                      )
+                                    : null,
+                                onRefreshPeers:
+                                    state.playServicesAvailable &&
+                                        state.meshStarted
+                                    ? () => unawaited(
+                                        controller.startMesh(
+                                          forceRestart: true,
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                              const SizedBox(height: 14),
+                              _buildModeSelector(
+                                isPublicMode: _isPublicMode,
+                                onPrivate: () {
+                                  setState(() {
+                                    _isPublicMode = false;
+                                    _status = null;
+                                  });
+                                  unawaited(ref.read(chatControllerProvider.notifier).publishWalkieAvailability(true));
+                                },
+                                onPublic: () {
                                   setState(() {
                                     _isPublicMode = true;
                                     _status = null;
                                   });
-                                  return;
-                                }
-
-                                setState(() {
-                                  _isPublicMode = false;
-                                  _status = null;
-                                });
-
-                                final nodeId = selected.peerNodeId;
-                                final peerName = selected.peerName;
-                                if (nodeId == null || peerName == null) return;
-                                final target = PrivateConversation(
-                                  peerNodeId: nodeId,
-                                  peerName: peerName,
-                                );
-                                ref
-                                    .read(chatControllerProvider.notifier)
-                                    .selectConversation(target);
-                                unawaited(
-                                  _autoStartPrivateWalkieIfEnabled(target),
-                                );
-                              },
-                            ),
-                            SizedBox(height: sectionGap),
-                            _buildDisplayPanel(
-                              callLabel: callLabel,
-                              peerCount: state.peers.length,
-                              alwaysOnlineLabel: alwaysOnlineLabel,
-                              isPublicMode: _isPublicMode,
-                              isTargetOnline: isTargetOnline,
-                              linkStatusLabel: linkStatusLabel,
-                              actionHintLabel: actionHintLabel,
-                              theme: theme,
-                            ),
-                            SizedBox(height: 10 * uiScale),
-                            SizedBox(
-                              height: controlSectionHeight,
-                              child: SingleChildScrollView(
-                                child: Column(
-                                  children: [
-                                    _buildLatchingPushButton(
-                                      isOn: stayOnlineOn,
-                                      enabled: stayOnlineEnabled,
-                                      hintText: stayOnlineHint,
-                                      openChatEnabled:
-                                          !(isHolding || isSending),
-                                      chatLaunchFlash: _chatLaunchFlash,
-                                      pingDotColor: pingDotColor,
-                                      pingEnabled: pingEnabled,
-                                      onPressed: () {
-                                        _triggerButtonFeedback();
-                                        if (_isPublicMode) {
-                                          ref
-                                              .read(
-                                                chatControllerProvider.notifier,
-                                              )
-                                              .setPublicWalkieStayOnline(
-                                                !stayOnlineOn,
-                                              );
-                                          return;
-                                        }
-                                        if (selected is PrivateConversation &&
-                                            privateStayOnlineEligible) {
-                                          ref
-                                              .read(
-                                                chatControllerProvider.notifier,
-                                              )
-                                              .setWalkieAlwaysOn(
-                                                selected.peerNodeId,
-                                                !stayOnlineOn,
-                                              );
-                                        }
-                                      },
-                                      onOpenChat: () async {
-                                        if (isHolding ||
-                                            isSending ||
-                                            _chatLaunchFlash) {
-                                          return;
-                                        }
-                                        _triggerButtonFeedback();
-                                        final navigator = Navigator.of(context);
-                                        if (!mounted) return;
-                                        setState(() {
-                                          _chatLaunchFlash = true;
-                                        });
-                                        await Future<void>.delayed(
-                                          const Duration(milliseconds: 120),
-                                        );
-                                        if (!mounted) return;
-                                        await navigator.pushNamed(
-                                          AppRouter.chat,
-                                        );
-                                        if (!mounted) return;
-                                        setState(() {
-                                          _chatLaunchFlash = false;
-                                        });
-                                      },
-                                      onPing: () async {
-                                        if (!pingEnabled) return;
-                                        _triggerButtonFeedback();
-                                        if (isActiveSessionForTarget) {
-                                          await ref
-                                              .read(
-                                                chatControllerProvider.notifier,
-                                              )
-                                              .endWalkieSession();
-                                          return;
-                                        }
-                                        if (isOutgoingInviteForTarget) {
-                                          await ref
-                                              .read(
-                                                chatControllerProvider.notifier,
-                                              )
-                                              .cancelWalkieInvite();
-                                          return;
-                                        }
-                                        if (!hasTarget || !isTargetOnline) {
-                                          return;
-                                        }
-                                        final peer = _peerByNodeId(
-                                          targetNodeId,
-                                        );
-                                        if (peer == null) return;
-                                        await _invitePeer(peer);
-                                      },
-                                    ),
-                                    if (!_isPublicMode) ...[
-                                      if (isIncomingInvite &&
-                                          invitePeer != null) ...[
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Expanded(
-                                                child: FilledButton(
-                                                  style: FilledButton.styleFrom(
-                                                    backgroundColor:
-                                                        _radioAmber,
-                                                    foregroundColor:
-                                                        Colors.black,
-                                                  ),
-                                                  onPressed: () async {
-                                                    await ref
-                                                        .read(
-                                                          chatControllerProvider
-                                                              .notifier,
-                                                        )
-                                                        .acceptWalkieInvite();
-                                                  },
-                                                  child: const Text(
-                                                    'Accept invite',
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Expanded(
-                                                child: OutlinedButton(
-                                                  onPressed: () async {
-                                                    await ref
-                                                        .read(
-                                                          chatControllerProvider
-                                                              .notifier,
-                                                        )
-                                                        .declineWalkieInvite();
-                                                  },
-                                                  child: const Text('Decline'),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ],
-                                  ],
-                                ),
+                                  unawaited(ref.read(chatControllerProvider.notifier).publishWalkieAvailability(stayOnlineOn));
+                                },
                               ),
-                            ),
-                            SizedBox(height: sectionGap),
-                            Center(
-                              child: _buildPttButton(
-                                isEnabled: isActiveSessionForTarget,
+                              const SizedBox(height: 14),
+                              _buildTargetCard(
+                                isPublicMode: _isPublicMode,
+                                hasTarget: hasTarget,
+                                targetName: hasTarget
+                                    ? targetName
+                                    : 'Private target',
+                                isTargetOnline: isTargetOnline,
+                                canReceivePrivate: !_isPublicMode && isTargetOnline && (selectedPrivateContact?.remoteWalkieAvailable ?? false),
                                 isHolding: isHolding,
                                 isSending: isSending,
-                                speakerActive: speakerActive,
-                                idleLabel: pttIdleLabel,
-                                size: pttSize,
-                                onCancel: isActiveSessionForTarget
-                                    ? () => unawaited(_cancelHoldRecording())
+                                onChooseTarget: _chooseTarget,
+                              ),
+                              const SizedBox(height: 12),
+                              _buildSessionActionCard(
+                                isPublicMode: _isPublicMode,
+                                meshStarted: state.meshStarted,
+                                isMeshStarting: state.isMeshStarting,
+                                playServicesAvailable:
+                                    state.playServicesAvailable,
+                                hasTarget: hasTarget,
+                                isTargetOnline: isTargetOnline,
+                                isActiveSessionForTarget:
+                                    isActiveSessionForTarget,
+                                isIncomingInvite: isIncomingInvite,
+                                isOutgoingInviteForTarget:
+                                    isOutgoingInviteForTarget,
+                                onAcceptInvite: () =>
+                                    unawaited(controller.acceptWalkieInvite()),
+                                onCancelInvite: () =>
+                                    unawaited(controller.cancelWalkieInvite()),
+                                onEndSession: () =>
+                                    unawaited(controller.endWalkieSession()),
+                                onInvite:
+                                    targetPeer != null &&
+                                        hasTarget &&
+                                        isTargetOnline
+                                    ? () => unawaited(_invitePeer(targetPeer))
+                                    : null,
+                                onStartMesh:
+                                    state.playServicesAvailable &&
+                                        !state.meshStarted
+                                    ? () => unawaited(controller.startMesh())
                                     : null,
                               ),
-                            ),
-                            SizedBox(height: statusGap),
-                          ],
+                              const SizedBox(height: 12),
+                              _buildSecondaryActions(
+                                isHolding: isHolding,
+                                isSending: isSending,
+                                stayOnlineOn: stayOnlineOn,
+                                stayOnlineEnabled: stayOnlineEnabled,
+                                stayOnlineHint: stayOnlineHint,
+                                onOpenChat: () async {
+                                  if (isHolding || isSending) return;
+                                  _triggerButtonFeedback();
+                                  if (!_isPublicMode) {
+                                    unawaited(
+                                      controller.publishWalkieAvailability(
+                                        stayOnlineOn,
+                                      ),
+                                    );
+                                  }
+                                  final navigator = Navigator.of(context);
+                                  if (!mounted) return;
+                                  await navigator.pushNamed(AppRouter.chat);
+                                },
+                                onToggleStayOnline: () {
+                                  if (!stayOnlineEnabled) return;
+                                  _triggerButtonFeedback();
+                                  if (_isPublicMode) {
+                                    controller.setPublicWalkieStayOnline(
+                                      !stayOnlineOn,
+                                    );
+                                  } else if (targetNodeId != null) {
+                                    final contact = state.knownContacts
+                                        .cast<KnownContact?>()
+                                        .firstWhere(
+                                          (item) => item?.nodeId == targetNodeId,
+                                          orElse: () => null,
+                                        );
+                                    if (contact == null) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Private profile is still syncing. Try again in a moment.',
+                                          ),
+                                          behavior: SnackBarBehavior.floating,
+                                          duration: Duration(seconds: 2),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    if (!contact.isTrusted) {
+                                      controller.trustContact(targetNodeId);
+                                    }
+                                    controller.setWalkieAlwaysOn(
+                                      targetNodeId,
+                                      !stayOnlineOn,
+                                    );
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 18),
+                              Center(
+                                child: _buildPttButton(
+                                  isEnabled: isActiveSessionForTarget,
+                                  isHolding: isHolding,
+                                  isSending: isSending,
+                                  speakerActive: speakerActive,
+                                  idleLabel: pttIdleLabel,
+                                  size: 220,
+                                  onCancel: isActiveSessionForTarget
+                                      ? () => unawaited(_cancelHoldRecording())
+                                      : null,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                actionHintLabel,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white.withAlpha(210),
+                                  fontSize: 13,
+                                  height: 1.4,
+                                ),
+                              ),
+                              if (_status != null) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.greenAccent.withAlpha(24),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.greenAccent.withAlpha(90),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    _status!,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: Colors.greenAccent.shade200,
+                                      fontSize: 13,
+                                      height: 1.3,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

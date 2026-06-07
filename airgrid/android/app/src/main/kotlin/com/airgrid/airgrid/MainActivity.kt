@@ -26,9 +26,11 @@ class MainActivity : FlutterActivity() {
     private val foregroundChannelName = "com.airgrid/foreground"
     private val playServicesChannelName = "com.airgrid/play_services"
     private val batteryOptimizationChannelName = "com.airgrid/battery_optimization"
+    private val platformChannelName = "com.airgrid/platform"
     private var foregroundChannel: MethodChannel? = null
     private var playServicesChannel: MethodChannel? = null
     private var batteryOptimizationChannel: MethodChannel? = null
+    private var platformChannel: MethodChannel? = null
     private var pendingExitAction = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -105,6 +107,18 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "openSystemBatteryOptimizationSettings" ->
                     result.success(openSystemBatteryOptimizationSettings())
+                else -> result.notImplemented()
+            }
+        }
+
+        platformChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            platformChannelName,
+        )
+
+        platformChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "androidSdkInt" -> result.success(Build.VERSION.SDK_INT)
                 else -> result.notImplemented()
             }
         }

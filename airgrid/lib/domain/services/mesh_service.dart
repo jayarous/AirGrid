@@ -31,8 +31,9 @@ import 'package:uuid/uuid.dart';
 class _KeyAnnounceProfileMeta {
   final String? iconId;
   final String? status;
+  final bool? walkieAvailable;
 
-  const _KeyAnnounceProfileMeta({this.iconId, this.status});
+  const _KeyAnnounceProfileMeta({this.iconId, this.status, this.walkieAvailable});
 }
 
 // -- Spool entry -------------------------------------------------------
@@ -595,7 +596,7 @@ class AirGridMeshService {
   ///
   /// Should be called after [TransportService.start] succeeds and whenever
   /// a new peer connects.  This is a best-effort send - it is not retried.
-  Future<void> sendKeyAnnounce() async {
+  Future<void> sendKeyAnnounce({Map<String, dynamic>? extraMeta}) async {
     final publicKeyB64 = _identity.publicKeyBase64;
     if (publicKeyB64 == null) return;
 
@@ -607,6 +608,12 @@ class AirGridMeshService {
     }
     if (profileStatus != null && profileStatus.isNotEmpty) {
       profileMeta['profileStatus'] = profileStatus;
+    }
+    // Merge any extra presence metadata (e.g. walkie availability)
+    if (extraMeta != null && extraMeta.isNotEmpty) {
+      for (final e in extraMeta.entries) {
+        profileMeta[e.key] = e.value;
+      }
     }
 
     final localNodeId = _identity.nodeId;
@@ -2565,6 +2572,7 @@ class AirGridMeshService {
           profileStatus: profileMeta.status,
           publicKeyBase64: publicKeyB64,
           lastSeenAt: DateTime.now(),
+          remoteWalkieAvailable: profileMeta.walkieAvailable ?? false,
         ),
       ),
     );
@@ -2646,6 +2654,7 @@ class AirGridMeshService {
 
       final iconRaw = decoded['profileIconId'];
       final statusRaw = decoded['profileStatus'];
+      final walkieRaw = decoded['walkieAvailable'];
 
       String? iconId;
       String? status;
@@ -2664,7 +2673,12 @@ class AirGridMeshService {
         }
       }
 
-      return _KeyAnnounceProfileMeta(iconId: iconId, status: status);
+      bool? walkieAvailable;
+      if (walkieRaw is bool) {
+        walkieAvailable = walkieRaw;
+      }
+
+      return _KeyAnnounceProfileMeta(iconId: iconId, status: status, walkieAvailable: walkieAvailable);
     } catch (_) {
       return const _KeyAnnounceProfileMeta();
     }

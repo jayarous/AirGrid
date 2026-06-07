@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AirGrid - Privacy Policy and Terms of Use</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;color:#111;background:#f7f7f8}
+    .wrap{max-width:920px;margin:0 auto;padding:32px 20px}
+    .card{background:#fff;padding:28px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.06)}
+    h1{margin:0 0 8px;font-size:2rem}
+    h2{margin-top:30px;font-size:1.35rem}
+    h3{margin-bottom:6px;font-size:1.05rem}
+    p,ul{line-height:1.55}
+    nav{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0}
+    nav a{display:inline-block;text-decoration:none;color:#1b6ca8;border:1px solid #b8d3e8;border-radius:8px;padding:10px 12px;background:#f3f8fc;font-weight:650}
+    .tagline{font-size:1.1rem;color:#444;margin-top:0}
+    .warning{background:#fff3cd;border:1px solid #f1d27a;border-radius:8px;padding:12px;margin:18px 0}
+    .divider{height:1px;background:#e6e6e6;margin:28px 0}
+    footer{font-size:.9rem;color:#555;margin-top:28px}
+    code{background:#f2f2f2;padding:1px 4px;border-radius:4px}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1>AirGrid</h1>
+      <p class="tagline">Offline-first peer-to-peer mesh chat for nearby Android devices.</p>
+      <p>Last updated: June 7, 2026</p>
+
+      <p>AirGrid lets nearby Android devices exchange public and private messages
+      using Google Nearby Connections over Bluetooth and Wi-Fi Direct, without a
+      central AirGrid messaging server.</p>
+
+      <p class="warning"><strong>Safety notice:</strong> AirGrid is not an
+      emergency or life-safety service. Nearby discovery, message delivery,
+      encryption, relays, walkie audio, and location sharing can fail or be
+      inaccurate.</p>
+
+      <nav aria-label="Page sections">
+        <a href="#privacy-policy">Privacy Policy</a>
+        <a href="#terms-of-use">Terms of Use</a>
+        <a href="#contact">Contact</a>
+      </nav>
+
+      <div class="divider"></div>
+
+      <section id="privacy-policy">
+        <h2>Privacy Policy</h2>
+        <p>AirGrid is an offline-first, peer-to-peer mesh chat app for Android.
+        This privacy policy explains what data AirGrid accesses and how that data
+        is handled. AirGrid is designed to keep messaging local to nearby devices
+        and does not require, transmit, or store messages on a central server.</p>
+
+        <h3>Summary</h3>
+        <ul>
+          <li>AirGrid does not collect or transmit your chat messages to AirGrid servers.</li>
+          <li>Local identity and cryptographic keys are generated and stored on-device.</li>
+          <li>The app requires Bluetooth / Wi-Fi and may ask for location permissions as required by Android Nearby Connections.</li>
+          <li>Safety reports are stored locally unless you choose to export or send them.</li>
+        </ul>
+
+        <h3>What the app stores on your device</h3>
+        <ul>
+          <li><strong>Messages:</strong> Chat messages are stored locally using SQLite. Messages remain on your device unless you or the app delete them.</li>
+          <li><strong>Local identity:</strong> A stable node ID and display name are stored in app preferences.</li>
+          <li><strong>Cryptographic keys:</strong> X25519 keypairs and related key material are generated locally and stored in secure storage. Private keys never leave your device.</li>
+          <li><strong>Known contacts:</strong> Persisted locally to allow encrypted private messages to be addressed to previously discovered peers.</li>
+          <li><strong>Safety reports:</strong> Reports you create are stored locally on your device unless you choose to export or send them.</li>
+          <li><strong>Optional location:</strong> Location may be processed and shared with connected peers only when you enable location sharing.</li>
+        </ul>
+
+        <h3>Permissions</h3>
+        <p>To discover and connect with nearby devices AirGrid may request Android
+        permissions for Bluetooth, Nearby Wi-Fi, location, and notifications.</p>
+        <ul>
+          <li>Bluetooth permissions for peer discovery and device-to-device transfer.</li>
+          <li><code>NEARBY_WIFI_DEVICES</code> for Wi-Fi Direct / Nearby Connections on newer Android versions.</li>
+          <li><code>ACCESS_FINE_LOCATION</code> where required by Nearby Connections or optional location sharing.</li>
+          <li>Notification permission for the active mesh session notification.</li>
+        </ul>
+
+        <h3>Networking and third-party services</h3>
+        <p>AirGrid uses the Android Nearby Connections runtime through Google Play
+        Services for peer discovery and transport. Google Play Services is a
+        third-party component; its behavior and any telemetry it performs are
+        governed by Google's policies. AirGrid itself does not upload chat
+        contents or keys to external servers.</p>
+
+        <h3>Use of encryption</h3>
+        <p>Private messaging uses X25519 key agreement and authenticated
+        encryption where peers have exchanged public keys. Private encryption is
+        opportunistic and is not a full verified identity system.</p>
+
+        <h3>Store-and-forward</h3>
+        <p>When delivering an encrypted private packet to an offline peer, AirGrid
+        may temporarily hold an encrypted packet locally for a limited time so it
+        can be forwarded when the recipient is next seen.</p>
+
+        <h3>User-generated content and safety tools</h3>
+        <p>AirGrid users create their own messages, media, display names, and
+        nearby interactions. You are responsible for the content you send. The app
+        includes local block and report controls for nearby users and messages.
+        AirGrid does not operate a central moderation server for normal mesh
+        messaging.</p>
+
+        <h3>Data deletion</h3>
+        <p>You can remove local messages, known contacts, and reset local identity
+        within the app where available. Uninstalling the app typically removes its
+        local data, but Android behavior may vary by device and OS version.</p>
+
+        <h3>Children</h3>
+        <p>AirGrid is intended for users who are at least 13 years old. Users
+        between 13 and 17 should use AirGrid only with permission from a parent
+        or guardian.</p>
+      </section>
+
+      <div class="divider"></div>
+
+      <section id="terms-of-use">
+        <h2>Terms of Use</h2>
+
+        <p class="warning"><strong>Important:</strong> These terms are a practical
+        draft for AirGrid's release process and should be reviewed by qualified
+        legal counsel before public launch.</p>
+
+        <h3>Acceptance</h3>
+        <p>By using AirGrid, you agree to these Terms of Use and acknowledge
+        AirGrid's safety limits. If you do not agree, do not use the app.</p>
+
+        <h3>As-is service</h3>
+        <p>AirGrid is provided "as is" and without warranties. Mesh communication
+        depends on nearby devices, Google Play Services, Bluetooth, Wi-Fi Direct,
+        Android permissions, battery settings, radio conditions, and distance.</p>
+
+        <h3>Not for emergency or critical use</h3>
+        <p>Do not rely on AirGrid for emergency, life-safety, rescue, medical,
+        military, aviation, disaster-response, or other critical communications.
+        Use official emergency channels and appropriate professional systems.</p>
+
+        <h3>Delivery, location, and encryption limits</h3>
+        <p>Nearby discovery, message delivery, encryption, relays,
+        store-and-forward, walkie audio, and location sharing may fail, be
+        delayed, or be inaccurate. Private encryption is opportunistic and is not
+        a full verified identity system. Public nearby chat and routing metadata
+        may be seen or handled by nearby AirGrid devices.</p>
+
+        <h3>User responsibility and prohibited conduct</h3>
+        <p>You are responsible for your messages, media, location sharing,
+        conduct, and legal compliance. Do not use AirGrid to send illegal,
+        harmful, threatening, abusive, harassing, sexually exploitative, hateful,
+        impersonating, spam, or otherwise objectionable content.</p>
+
+        <h3>Age requirement</h3>
+        <p>You must be at least 13 years old to use AirGrid. If you are between
+        13 and 17, you may use AirGrid only with permission from a parent or
+        guardian.</p>
+
+        <h3>Blocking and reports</h3>
+        <p>AirGrid includes local blocking and safety reporting tools. Reports are
+        stored on your device unless you choose to export or send them. AirGrid
+        does not operate a central moderation server for normal mesh messaging.</p>
+
+        <h3>Limitation of liability</h3>
+        <p>To the maximum extent permitted by law, the AirGrid maintainers are
+        not liable for losses, damages, missed messages, inaccurate location,
+        user content, third-party conduct, or reliance on the app for critical
+        needs.</p>
+
+        <h3>Changes</h3>
+        <p>We may update these terms from time to time. Updates will appear on
+        this page with a new "Last updated" date and may require in-app
+        acceptance.</p>
+      </section>
+
+      <div class="divider"></div>
+
+      <section id="contact">
+        <h2>Contact</h2>
+        <p>For questions about AirGrid, this Privacy Policy, or these Terms of
+        Use, contact jayarous@gmail.com.</p>
+        <p><em>Maintainer:</em> AirGrid project team</p>
+      </section>
+
+      <footer>
+        <p>AirGrid - offline peer-to-peer mesh chat for Android.</p>
+      </footer>
+    </section>
+  </main>
+</body>
+</html>

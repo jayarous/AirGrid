@@ -16,11 +16,18 @@ import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class NearbyScreen extends ConsumerWidget {
+class NearbyScreen extends ConsumerStatefulWidget {
   const NearbyScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NearbyScreen> createState() => _NearbyScreenState();
+}
+
+class _NearbyScreenState extends ConsumerState<NearbyScreen> {
+  String? _selectedEndpointId;
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(chatControllerProvider);
     final cs = Theme.of(context).colorScheme;
     final nearbyBlocked = !state.playServicesAvailable;
@@ -55,6 +62,12 @@ class NearbyScreen extends ConsumerWidget {
             peers: state.peers,
             localLocation: state.localLocation,
             peerLocations: state.peerLocations,
+            selectedEndpointId: _selectedEndpointId,
+            onPeerSelected: (peer) {
+              setState(() {
+                _selectedEndpointId = peer.endpointId;
+              });
+            },
           ),
           const SizedBox(height: 16),
           _LocationSharingPanel(
@@ -90,6 +103,7 @@ class NearbyScreen extends ConsumerWidget {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: _NearbyPeerTile(
                   peer: peer,
+                  isSelected: _selectedEndpointId == peer.endpointId,
                   contactProfile: peer.nodeId == null
                       ? null
                       : state.knownContacts.cast<KnownContact?>().firstWhere(
@@ -263,15 +277,55 @@ void _showReportUserDialog(
   );
 }
 
+double _maxVisibleDistanceMetersHelper(PeerLocation? localLocation, Map<String, PeerLocation> peerLocations) {
+  final local = localLocation;
+  if (local == null) return 100;
+  final distances = peerLocations.values
+      .map(local.distanceMetersTo)
+      .where((distance) => distance.isFinite && distance > 0)
+      .toList();
+  if (distances.isEmpty) return 100;
+  return math.max(50, distances.reduce(math.max));
+}
+
+(double, double) _placementForHelper(
+  MeshPeer peer,
+  PeerLocation? localLocation,
+  PeerLocation? peerLocation,
+  int index,
+  double maxDistance,
+  double smoothedHeadingDegrees,
+) {
+  final local = localLocation;
+  if (local != null && peerLocation != null) {
+    final bearing = local.bearingDegreesTo(peerLocation);
+    final distance = local.distanceMetersTo(peerLocation);
+    final angle = (bearing - smoothedHeadingDegrees - 90) * math.pi / 180;
+    return (angle, (distance / maxDistance).clamp(0.18, 0.94));
+  }
+
+  final seed = peer.endpointId.codeUnits.fold<int>(
+    index + 17,
+    (value, code) => (value * 31 + code) & 0x7fffffff,
+  );
+  final angle = (seed % 360) * math.pi / 180;
+  final distance = 0.36 + ((seed ~/ 360) % 46) / 100;
+  return (angle, distance);
+}
+
 class _NearbyRadar extends StatefulWidget {
   final List<MeshPeer> peers;
   final PeerLocation? localLocation;
   final Map<String, PeerLocation> peerLocations;
+  final String? selectedEndpointId;
+  final ValueChanged<MeshPeer>? onPeerSelected;
 
   const _NearbyRadar({
     required this.peers,
     required this.localLocation,
     required this.peerLocations,
+    this.selectedEndpointId,
+    this.onPeerSelected,
   });
 
   @override
@@ -352,26 +406,69 @@ class _NearbyRadarState extends State<_NearbyRadar> {
     final cs = Theme.of(context).colorScheme;
     return AspectRatio(
       aspectRatio: 1,
-      child: Container(
-        decoration: BoxDecoration(
-          color: cs.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: cs.outlineVariant),
-        ),
-        child: CustomPaint(
-          painter: _RadarPainter(
-            peers: widget.peers,
-            localLocation: widget.localLocation,
-            peerLocations: widget.peerLocations,
-            smoothedHeadingDegrees: _smoothedHeading ?? 0.0,
-            primary: cs.primary,
-            tertiary: cs.tertiary,
-            outline: cs.outlineVariant,
-            surface: cs.surface,
-            onSurface: cs.onSurface,
-            onSurfaceVariant: cs.onSurfaceVariant,
-          ),
-        ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final size = Size(constraints.maxWidth, constraints.maxHeight);
+          return GestureDetector(
+            onTapUp: (details) {
+              final center = Offset(size.width / 2, size.height / 2);
+              final radius = math.min(size.width, size.height) / 2 - 28;
+              final maxDistance = _maxVisibleDistanceMetersHelper(
+                widget.localLocation,
+                widget.peerLocations,
+              );
+              final headingDegrees = _smoothedHeading ?? 0.0;
+
+              for (var i = 0; i < widget.peers.length; i++) {
+                final peer = widget.peers[i];
+                final peerLocation = peer.nodeId == null
+                    ? null
+                    : widget.peerLocations[peer.nodeId];
+                final placement = _placementForHelper(
+                  peer,
+                  widget.localLocation,
+                  peerLocation,
+                  i,
+                  maxDistance,
+                  headingDegrees,
+                );
+                final angle = placement.$1;
+                final distance = radius * placement.$2;
+                final offset = Offset(
+                  center.dx + math.cos(angle) * distance,
+                  center.dy + math.sin(angle) * distance,
+                );
+                final touchDistance = (details.localPosition - offset).distance;
+                if (touchDistance <= 24.0) {
+                  widget.onPeerSelected?.call(peer);
+                  break;
+                }
+              }
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: cs.outlineVariant),
+              ),
+              child: CustomPaint(
+                painter: _RadarPainter(
+                  peers: widget.peers,
+                  localLocation: widget.localLocation,
+                  peerLocations: widget.peerLocations,
+                  smoothedHeadingDegrees: _smoothedHeading ?? 0.0,
+                  selectedEndpointId: widget.selectedEndpointId,
+                  primary: cs.primary,
+                  tertiary: cs.tertiary,
+                  outline: cs.outlineVariant,
+                  surface: cs.surface,
+                  onSurface: cs.onSurface,
+                  onSurfaceVariant: cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -381,6 +478,7 @@ class _RadarPainter extends CustomPainter {
   final List<MeshPeer> peers;
   final PeerLocation? localLocation;
   final Map<String, PeerLocation> peerLocations;
+  final String? selectedEndpointId;
   final Color primary;
   final Color tertiary;
   final Color outline;
@@ -395,6 +493,7 @@ class _RadarPainter extends CustomPainter {
     required this.localLocation,
     required this.peerLocations,
     required this.smoothedHeadingDegrees,
+    this.selectedEndpointId,
     required this.primary,
     required this.tertiary,
     required this.outline,
@@ -480,13 +579,20 @@ class _RadarPainter extends CustomPainter {
     canvas.drawCircle(center, 18, Paint()..color = primary.withAlpha(28));
     _drawCenteredText(canvas, 'You', center.translate(0, 28), onSurface, 12);
 
-    final maxDistance = _maxVisibleDistanceMeters();
+    final maxDistance = _maxVisibleDistanceMetersHelper(localLocation, peerLocations);
     for (var i = 0; i < peers.length; i++) {
       final peer = peers[i];
       final peerLocation = peer.nodeId == null
           ? null
           : peerLocations[peer.nodeId];
-      final placement = _placementFor(peer, peerLocation, i, maxDistance);
+      final placement = _placementForHelper(
+        peer,
+        localLocation,
+        peerLocation,
+        i,
+        maxDistance,
+        headingDegrees,
+      );
       final angle = placement.$1;
       final distance = radius * placement.$2;
       final offset = Offset(
@@ -501,6 +607,16 @@ class _RadarPainter extends CustomPainter {
         16,
         Paint()..color = peerPaint.color.withAlpha(26),
       );
+
+      final isSelected = peer.endpointId == selectedEndpointId;
+      if (isSelected) {
+        final selectPaint = Paint()
+          ..color = primary
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0;
+        canvas.drawCircle(offset, 18, selectPaint);
+      }
+
       _drawCenteredText(
         canvas,
         _initials(peer.displayName),
@@ -510,40 +626,6 @@ class _RadarPainter extends CustomPainter {
         fontWeight: FontWeight.w700,
       );
     }
-  }
-
-  double _maxVisibleDistanceMeters() {
-    final local = localLocation;
-    if (local == null) return 100;
-    final distances = peerLocations.values
-        .map(local.distanceMetersTo)
-        .where((distance) => distance.isFinite && distance > 0)
-        .toList();
-    if (distances.isEmpty) return 100;
-    return math.max(50, distances.reduce(math.max));
-  }
-
-  (double, double) _placementFor(
-    MeshPeer peer,
-    PeerLocation? peerLocation,
-    int index,
-    double maxDistance,
-  ) {
-    final local = localLocation;
-    if (local != null && peerLocation != null) {
-      final bearing = local.bearingDegreesTo(peerLocation);
-      final distance = local.distanceMetersTo(peerLocation);
-      final angle = (bearing - smoothedHeadingDegrees - 90) * math.pi / 180;
-      return (angle, (distance / maxDistance).clamp(0.18, 0.94));
-    }
-
-    final seed = peer.endpointId.codeUnits.fold<int>(
-      index + 17,
-      (value, code) => (value * 31 + code) & 0x7fffffff,
-    );
-    final angle = (seed % 360) * math.pi / 180;
-    final distance = 0.36 + ((seed ~/ 360) % 46) / 100;
-    return (angle, distance);
   }
 
   String _initials(String name) {
@@ -587,6 +669,7 @@ class _RadarPainter extends CustomPainter {
       oldDelegate.localLocation != localLocation ||
       oldDelegate.smoothedHeadingDegrees != smoothedHeadingDegrees ||
       oldDelegate.peerLocations != peerLocations ||
+      oldDelegate.selectedEndpointId != selectedEndpointId ||
       oldDelegate.primary != primary ||
       oldDelegate.tertiary != tertiary ||
       oldDelegate.outline != outline;
@@ -708,6 +791,7 @@ class _NearbyPeerTile extends StatelessWidget {
   final VoidCallback? onUntrust;
   final VoidCallback? onBlock;
   final VoidCallback? onReport;
+  final bool isSelected;
 
   const _NearbyPeerTile({
     required this.peer,
@@ -721,6 +805,7 @@ class _NearbyPeerTile extends StatelessWidget {
     this.onUntrust,
     this.onBlock,
     this.onReport,
+    this.isSelected = false,
   });
 
   @override
@@ -734,19 +819,30 @@ class _NearbyPeerTile extends StatelessWidget {
       onLongPress: (onBlock != null || onTrust != null || onReport != null)
           ? () => _showPeerSheet(context)
           : null,
+      selected: isSelected,
+      tileColor: isSelected ? cs.primaryContainer.withAlpha(50) : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: cs.outlineVariant),
+        side: BorderSide(
+          color: isSelected ? cs.primary : cs.outlineVariant,
+          width: isSelected ? 2.0 : 1.0,
+        ),
       ),
       leading: CircleAvatar(
-        backgroundColor: peer.encryptionReady
-            ? cs.tertiaryContainer
-            : cs.primaryContainer,
+        backgroundColor: isSelected
+            ? cs.primary
+            : (peer.encryptionReady
+                ? cs.tertiaryContainer
+                : cs.primaryContainer),
         child: Icon(
-          peer.encryptionReady ? Icons.lock_outline : Icons.person_pin_circle,
-          color: peer.encryptionReady
-              ? cs.onTertiaryContainer
-              : cs.onPrimaryContainer,
+          isSelected
+              ? Icons.person_pin_circle
+              : (peer.encryptionReady ? Icons.lock_outline : Icons.person_pin_circle),
+          color: isSelected
+              ? cs.onPrimary
+              : (peer.encryptionReady
+                  ? cs.onTertiaryContainer
+                  : cs.onPrimaryContainer),
         ),
       ),
       title: Text(
