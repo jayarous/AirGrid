@@ -58,6 +58,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   @override
   void initState() {
     super.initState();
+    final selectedConv = ref.read(chatControllerProvider).selectedConversation;
+    _isPublicMode = selectedConv is PublicConversation;
+
     _lastChannelWheelIndex = _isPublicMode ? 1 : 0;
     _channelWheelController = FixedExtentScrollController(
       initialItem: _isPublicMode ? 1 : 0,
@@ -157,6 +160,13 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   void _triggerButtonFeedback() {
     HapticFeedback.selectionClick();
     SystemSound.play(SystemSoundType.click);
+  }
+
+  void _setStatus(String message) {
+    if (!mounted) return;
+    setState(() {
+      _status = message;
+    });
   }
 
   String? _currentTargetNodeId() {
@@ -410,11 +420,15 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           duration: Duration(seconds: 2),
         ),
       );
+      _setStatus('No online private peers available yet');
       return;
     }
 
     final selectedNodeId = await _showChooseTargetSheet(candidates);
-    if (selectedNodeId == null) return;
+    if (selectedNodeId == null) {
+      _setStatus('Target selection canceled');
+      return;
+    }
 
     if (selectedNodeId.startsWith('invite:')) {
       final peerNodeId = selectedNodeId.substring('invite:'.length);
@@ -424,7 +438,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       );
       if (selectedPeer == null) return;
       if (_isRiderMode) {
-        ref.read(chatControllerProvider.notifier).setWalkiePeerNodeId(peerNodeId);
+        ref
+            .read(chatControllerProvider.notifier)
+            .setWalkiePeerNodeId(peerNodeId);
+        _setStatus('Rider target set to ${selectedPeer.displayName}');
         return;
       }
       await _invitePeer(selectedPeer);
@@ -440,6 +457,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     final controller = ref.read(chatControllerProvider.notifier);
     if (_isRiderMode) {
       controller.setWalkiePeerNodeId(selectedNodeId);
+      _setStatus('Rider target set to ${selectedPeer.displayName}');
     } else {
       controller.selectConversation(
         PrivateConversation(
@@ -447,6 +465,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           peerName: selectedPeer.displayName,
         ),
       );
+      _setStatus('Private target set to ${selectedPeer.displayName}');
     }
 
     if (!_isRiderMode) {
@@ -487,6 +506,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                     child: Text(
                       _isRiderMode ? 'Choose rider' : 'Choose walkie target',
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: Colors.white,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -647,13 +667,20 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       ),
     );
     if (accepted == true) {
+      _setStatus('Accepting walkie invite...');
       await ref.read(chatControllerProvider.notifier).acceptWalkieInvite();
+    } else if (accepted == false) {
+      _setStatus('Walkie invite dismissed');
     }
   }
 
   Future<void> _startHoldRecording() async {
+    _triggerButtonFeedback();
     final current = ref.read(chatControllerProvider);
-    if (current.walkieIsTransmitting || current.walkieIsSending) return;
+    if (current.walkieIsTransmitting || current.walkieIsSending) {
+      _setStatus('Walkie is already busy');
+      return;
+    }
 
     String? peerNodeIdForSession;
     if (!_isPublicMode) {
@@ -667,6 +694,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             duration: Duration(seconds: 2),
           ),
         );
+        _setStatus('Select an online private peer first');
         return;
       }
 
@@ -681,6 +709,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             duration: Duration(seconds: 2),
           ),
         );
+        _setStatus('Invite and wait for accept before talking');
         return;
       }
       peerNodeIdForSession = target.peerNodeId;
@@ -710,6 +739,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           duration: Duration(seconds: 2),
         ),
       );
+      _setStatus('Microphone permission denied');
       return;
     }
 
@@ -723,6 +753,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           duration: Duration(seconds: 2),
         ),
       );
+      _setStatus('Microphone permission denied');
       return;
     }
 
@@ -744,6 +775,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           duration: Duration(seconds: 2),
         ),
       );
+      _setStatus('Failed to start walkie recording');
       return;
     }
 
@@ -1194,8 +1226,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             : () {
                 _triggerButtonFeedback();
                 if (meshStarted) {
+                  _setStatus('Stopping mesh...');
                   controller.stopMesh();
                 } else {
+                  _setStatus('Starting mesh...');
                   controller.startMesh();
                 }
               },
@@ -1325,6 +1359,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             onTap: () {
               _triggerButtonFeedback();
               final next = !isDiscovering;
+              _setStatus(next ? 'Scanning turned on' : 'Scanning turned off');
               controller.setDiscoveryEnabled(next);
               if (next) showSnack('Scanning for nearby AirGrid users');
             },
@@ -1337,6 +1372,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             onTap: () {
               _triggerButtonFeedback();
               final next = !isAdvertising;
+              _setStatus(
+                next ? 'Availability turned on' : 'Availability turned off',
+              );
               controller.setAdvertisingEnabled(next);
               if (next) {
                 showSnack('Other AirGrid users nearby can find you');
@@ -1350,6 +1388,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             enabled: meshStarted && !isMeshStarting && !isDisabled,
             onTap: () {
               _triggerButtonFeedback();
+              _setStatus('Refreshing nearby peers...');
               controller.startMesh(forceRestart: true);
             },
           ),
@@ -2343,10 +2382,32 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     final hasUsableTarget = targetPeer != null && isTargetOnline;
     final isTrustedTarget =
         contact != null && contact.isTrusted && !contact.isBlocked;
-    final canStart =
-        meshStarted &&
-        hasUsableTarget &&
-        isTrustedTarget;
+    final canStart = meshStarted && hasUsableTarget && isTrustedTarget;
+    final riderSegmentStyle = ButtonStyle(
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        return states.contains(WidgetState.selected)
+            ? _radioAmber
+            : const Color(0xFF151C25);
+      }),
+      foregroundColor: WidgetStateProperty.resolveWith((states) {
+        return states.contains(WidgetState.selected)
+            ? Colors.black
+            : Colors.white.withAlpha(220);
+      }),
+      iconColor: WidgetStateProperty.resolveWith((states) {
+        return states.contains(WidgetState.selected)
+            ? Colors.black
+            : Colors.white.withAlpha(220);
+      }),
+      side: WidgetStateProperty.resolveWith((states) {
+        return BorderSide(
+          color: states.contains(WidgetState.selected)
+              ? _radioAmber
+              : Colors.white.withAlpha(55),
+        );
+      }),
+      overlayColor: WidgetStatePropertyAll(Colors.white.withAlpha(18)),
+    );
     final status = rider.isActive
         ? 'Live with ${rider.peerName ?? 'rider'}'
         : rider.isStarting
@@ -2416,8 +2477,17 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                     ),
                   ],
                   selected: {rider.settings.micMode},
-                  onSelectionChanged: (value) =>
-                      unawaited(riderController.setMicMode(value.first)),
+                  style: riderSegmentStyle,
+                  onSelectionChanged: (value) {
+                    final mode = value.first;
+                    _triggerButtonFeedback();
+                    _setStatus(
+                      mode == RiderMicMode.alwaysOpen
+                          ? 'Rider mic set to open'
+                          : 'Rider mic set to voice activated',
+                    );
+                    unawaited(riderController.setMicMode(mode));
+                  },
                 ),
               ),
             ],
@@ -2440,8 +2510,17 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                     ),
                   ],
                   selected: {rider.settings.startPolicy},
-                  onSelectionChanged: (value) =>
-                      unawaited(riderController.setStartPolicy(value.first)),
+                  style: riderSegmentStyle,
+                  onSelectionChanged: (value) {
+                    final policy = value.first;
+                    _triggerButtonFeedback();
+                    _setStatus(
+                      policy == RiderStartPolicy.trustedAutoJoin
+                          ? 'Rider auto-join enabled'
+                          : 'Rider ask-to-start enabled',
+                    );
+                    unawaited(riderController.setStartPolicy(policy));
+                  },
                 ),
               ),
             ],
@@ -2459,7 +2538,11 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
               !isTrustedTarget &&
               onTrustTarget != null) ...[
             FilledButton.icon(
-              onPressed: onTrustTarget,
+              onPressed: () {
+                _triggerButtonFeedback();
+                _setStatus('Trusting ${targetPeer.displayName}...');
+                onTrustTarget();
+              },
               icon: const Icon(Icons.verified_rounded),
               label: Text('Trust ${targetPeer.displayName}'),
             ),
@@ -2470,16 +2553,22 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () =>
-                        unawaited(riderController.declineIncoming()),
+                    onPressed: () {
+                      _triggerButtonFeedback();
+                      _setStatus('Rider Mode invite declined');
+                      unawaited(riderController.declineIncoming());
+                    },
                     child: const Text('Decline'),
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: () =>
-                        unawaited(riderController.acceptIncoming()),
+                    onPressed: () {
+                      _triggerButtonFeedback();
+                      _setStatus('Accepting Rider Mode invite...');
+                      unawaited(riderController.acceptIncoming());
+                    },
                     icon: const Icon(Icons.call_rounded),
                     label: const Text('Accept'),
                   ),
@@ -2492,11 +2581,17 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                 Expanded(
                   child: FilledButton.icon(
                     onPressed: rider.isActive
-                        ? () => unawaited(riderController.endSession())
+                        ? () {
+                            _triggerButtonFeedback();
+                            _setStatus('Ending Rider Mode...');
+                            unawaited(riderController.endSession());
+                          }
                         : canStart && !rider.isStarting
-                        ? () => unawaited(
-                            riderController.startSession(targetPeer),
-                          )
+                        ? () {
+                            _triggerButtonFeedback();
+                            _setStatus('Starting Rider Mode...');
+                            unawaited(riderController.startSession(targetPeer));
+                          }
                         : null,
                     icon: Icon(
                       rider.isActive
@@ -2511,8 +2606,15 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                 if (rider.isActive) ...[
                   const SizedBox(width: 10),
                   IconButton.filledTonal(
-                    onPressed: () =>
-                        unawaited(riderController.setMuted(!rider.isMuted)),
+                    onPressed: () {
+                      _triggerButtonFeedback();
+                      _setStatus(
+                        rider.isMuted
+                            ? 'Rider microphone unmuted'
+                            : 'Rider microphone muted',
+                      );
+                      unawaited(riderController.setMuted(!rider.isMuted));
+                    },
                     icon: Icon(
                       rider.isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
                     ),
@@ -2631,19 +2733,22 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
               height: 1.4,
             ),
           ),
-          if (!isPublicMode) ...[
-            const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: isHolding || isSending ? null : onChooseTarget,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF1D2630),
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: const Color(0xFF232B36),
-                disabledForegroundColor: Colors.white38,
-              ),
-              child: const Text('Choose person'),
-            ),
-          ],
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 40,
+            child: isPublicMode
+                ? const SizedBox.shrink()
+                : FilledButton.tonal(
+                    onPressed: isHolding || isSending ? null : onChooseTarget,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1D2630),
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: const Color(0xFF232B36),
+                      disabledForegroundColor: Colors.white38,
+                    ),
+                    child: const Text('Choose person'),
+                  ),
+          ),
         ],
       ),
     );
@@ -3011,7 +3116,14 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       onLongPressCancel: isEnabled
           ? () => unawaited(_cancelHoldRecording())
           : null,
-      onTap: isHolding ? onCancel : null,
+      onTap: isHolding
+          ? onCancel
+          : !isEnabled
+          ? () {
+              _triggerButtonFeedback();
+              _setStatus(idleLabel);
+            }
+          : null,
       child: AnimatedBuilder(
         animation: _speakerPulse,
         builder: (context, child) {
@@ -3114,51 +3226,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
   }
 
-  Widget _buildWalkieBackdrop() {
-    return IgnorePointer(
-      child: Stack(
-        children: [
-          Positioned(
-            top: -130,
-            left: -100,
-            child: Container(
-              width: 260,
-              height: 260,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFFFFA126).withAlpha(28),
-              ),
-            ),
-          ),
-          Positioned(
-            top: 220,
-            right: -90,
-            child: Container(
-              width: 240,
-              height: 240,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF57D163).withAlpha(22),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: -120,
-            left: 30,
-            child: Container(
-              width: 220,
-              height: 220,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withAlpha(10),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     ref.listen<String?>(
@@ -3234,8 +3301,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         : privateStayOnlineEligible
         ? 'Latches always-on walkie for this trusted friend.'
         : 'Trust this friend first to enable private stay online.';
-    final riderTrustNodeId =
-        _isRiderMode && isTargetOnline ? targetPeer?.nodeId : null;
+    final riderTrustNodeId = _isRiderMode && isTargetOnline
+        ? targetPeer?.nodeId
+        : null;
     final riderTrustName = targetPeer?.displayName ?? targetName;
     final speakerActive =
         isHolding ||
@@ -3298,7 +3366,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          Positioned.fill(child: _buildWalkieBackdrop()),
           SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -3334,38 +3401,68 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                     state.playServicesAvailable,
                                 peerCount: state.peers.length,
                                 onToggleMesh: state.playServicesAvailable
-                                    ? () => unawaited(
-                                        state.meshStarted
-                                            ? controller.stopMesh()
-                                            : controller.startMesh(),
-                                      )
+                                    ? () {
+                                        _triggerButtonFeedback();
+                                        _setStatus(
+                                          state.meshStarted
+                                              ? 'Stopping mesh...'
+                                              : 'Starting mesh...',
+                                        );
+                                        unawaited(
+                                          state.meshStarted
+                                              ? controller.stopMesh()
+                                              : controller.startMesh(),
+                                        );
+                                      }
                                     : null,
                                 onToggleAdvertising:
                                     state.playServicesAvailable &&
                                         state.meshStarted
-                                    ? () => unawaited(
-                                        controller.setAdvertisingEnabled(
-                                          !state.isAdvertising,
-                                        ),
-                                      )
+                                    ? () {
+                                        final next = !state.isAdvertising;
+                                        _triggerButtonFeedback();
+                                        _setStatus(
+                                          next
+                                              ? 'Availability turned on'
+                                              : 'Availability turned off',
+                                        );
+                                        unawaited(
+                                          controller.setAdvertisingEnabled(
+                                            next,
+                                          ),
+                                        );
+                                      }
                                     : null,
                                 onToggleDiscovering:
                                     state.playServicesAvailable &&
                                         state.meshStarted
-                                    ? () => unawaited(
-                                        controller.setDiscoveryEnabled(
-                                          !state.isDiscovering,
-                                        ),
-                                      )
+                                    ? () {
+                                        final next = !state.isDiscovering;
+                                        _triggerButtonFeedback();
+                                        _setStatus(
+                                          next
+                                              ? 'Scanning turned on'
+                                              : 'Scanning turned off',
+                                        );
+                                        unawaited(
+                                          controller.setDiscoveryEnabled(next),
+                                        );
+                                      }
                                     : null,
                                 onRefreshPeers:
                                     state.playServicesAvailable &&
                                         state.meshStarted
-                                    ? () => unawaited(
-                                        controller.startMesh(
-                                          forceRestart: true,
-                                        ),
-                                      )
+                                    ? () {
+                                        _triggerButtonFeedback();
+                                        _setStatus(
+                                          'Refreshing nearby peers...',
+                                        );
+                                        unawaited(
+                                          controller.startMesh(
+                                            forceRestart: true,
+                                          ),
+                                        );
+                                      }
                                     : null,
                               ),
                               const SizedBox(height: 14),
@@ -3376,7 +3473,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                   setState(() {
                                     _isPublicMode = false;
                                     _isRiderMode = false;
-                                    _status = null;
+                                    _status = 'Private mode selected';
                                   });
                                   unawaited(
                                     ref
@@ -3388,7 +3485,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                   setState(() {
                                     _isPublicMode = true;
                                     _isRiderMode = false;
-                                    _status = null;
+                                    _status = 'Public mode selected';
                                   });
                                   unawaited(
                                     ref
@@ -3402,7 +3499,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                   setState(() {
                                     _isPublicMode = false;
                                     _isRiderMode = true;
-                                    _status = null;
+                                    _status = 'Rider mode selected';
                                   });
                                   unawaited(
                                     ref
@@ -3477,24 +3574,41 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                   isIncomingInvite: isIncomingInvite,
                                   isOutgoingInviteForTarget:
                                       isOutgoingInviteForTarget,
-                                  onAcceptInvite: () => unawaited(
-                                    controller.acceptWalkieInvite(),
-                                  ),
-                                  onCancelInvite: () => unawaited(
-                                    controller.cancelWalkieInvite(),
-                                  ),
-                                  onEndSession: () =>
-                                      unawaited(controller.endWalkieSession()),
+                                  onAcceptInvite: () {
+                                    _triggerButtonFeedback();
+                                    _setStatus('Accepting walkie invite...');
+                                    unawaited(controller.acceptWalkieInvite());
+                                  },
+                                  onCancelInvite: () {
+                                    _triggerButtonFeedback();
+                                    _setStatus('Walkie invite canceled');
+                                    unawaited(controller.cancelWalkieInvite());
+                                  },
+                                  onEndSession: () {
+                                    _triggerButtonFeedback();
+                                    _setStatus('Ending walkie session...');
+                                    unawaited(controller.endWalkieSession());
+                                  },
                                   onInvite:
                                       targetPeer != null &&
                                           hasTarget &&
                                           isTargetOnline
-                                      ? () => unawaited(_invitePeer(targetPeer))
+                                      ? () {
+                                          _triggerButtonFeedback();
+                                          _setStatus(
+                                            'Sending invite to $targetName...',
+                                          );
+                                          unawaited(_invitePeer(targetPeer));
+                                        }
                                       : null,
                                   onStartMesh:
                                       state.playServicesAvailable &&
                                           !state.meshStarted
-                                      ? () => unawaited(controller.startMesh())
+                                      ? () {
+                                          _triggerButtonFeedback();
+                                          _setStatus('Starting mesh...');
+                                          unawaited(controller.startMesh());
+                                        }
                                       : null,
                                 ),
                               const SizedBox(height: 12),
@@ -3508,6 +3622,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                   onOpenChat: () async {
                                     if (isHolding || isSending) return;
                                     _triggerButtonFeedback();
+                                    _setStatus('Opening chat...');
                                     if (!_isPublicMode) {
                                       unawaited(
                                         controller.publishWalkieAvailability(
@@ -3523,6 +3638,11 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                     if (!stayOnlineEnabled) return;
                                     _triggerButtonFeedback();
                                     if (_isPublicMode) {
+                                      _setStatus(
+                                        !stayOnlineOn
+                                            ? 'Public stay online turned on'
+                                            : 'Public stay online turned off',
+                                      );
                                       controller.setPublicWalkieStayOnline(
                                         !stayOnlineOn,
                                       );
@@ -3546,11 +3666,19 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                             duration: Duration(seconds: 2),
                                           ),
                                         );
+                                        _setStatus(
+                                          'Private profile is still syncing',
+                                        );
                                         return;
                                       }
                                       if (!contact.isTrusted) {
                                         controller.trustContact(targetNodeId);
                                       }
+                                      _setStatus(
+                                        !stayOnlineOn
+                                            ? 'Private stay online turned on'
+                                            : 'Private stay online turned off',
+                                      );
                                       controller.setWalkieAlwaysOn(
                                         targetNodeId,
                                         !stayOnlineOn,
@@ -3576,40 +3704,19 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                 ),
                               const SizedBox(height: 12),
                               Text(
-                                actionHintLabel,
+                                _status ?? actionHintLabel,
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  color: Colors.white.withAlpha(210),
+                                  color: _status == null
+                                      ? Colors.white.withAlpha(210)
+                                      : Colors.greenAccent.shade200,
                                   fontSize: 13,
                                   height: 1.4,
+                                  fontWeight: _status == null
+                                      ? FontWeight.w400
+                                      : FontWeight.w600,
                                 ),
                               ),
-                              if (_status != null) ...[
-                                const SizedBox(height: 10),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.greenAccent.withAlpha(24),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: Colors.greenAccent.withAlpha(90),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    _status!,
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: Colors.greenAccent.shade200,
-                                      fontSize: 13,
-                                      height: 1.3,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              ],
                             ],
                           ),
                         ),

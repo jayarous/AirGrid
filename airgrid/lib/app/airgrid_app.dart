@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:airgrid/app/app_router.dart';
+import 'package:airgrid/core/foreground_service_bridge.dart';
 import 'package:airgrid/core/legal_text.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
+import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -19,10 +21,30 @@ class AirGridApp extends ConsumerStatefulWidget {
 
 class _AirGridAppState extends ConsumerState<AirGridApp> {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  StreamSubscription<PrivateMessageNotificationTap>? _notificationTapSub;
   String? _lastPromptedInviteSessionId;
   bool _inviteDialogOpen = false;
   bool _termsDialogOpen = false;
   bool _termsAcceptedThisSession = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final foreground = ref.read(foregroundServiceProvider);
+    _notificationTapSub = foreground.privateMessageNotificationTaps.listen(
+      _openPrivateMessageNotification,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_consumePendingPrivateMessageNotificationTap());
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_notificationTapSub?.cancel());
+    super.dispose();
+  }
 
   MeshPeer? _peerByNodeId(String? nodeId) {
     if (nodeId == null) return null;
@@ -31,6 +53,35 @@ class _AirGridAppState extends ConsumerState<AirGridApp> {
       (peer) => peer?.nodeId == nodeId,
       orElse: () => null,
     );
+  }
+
+  Future<void> _consumePendingPrivateMessageNotificationTap() async {
+    final tap = await ref
+        .read(foregroundServiceProvider)
+        .consumePendingPrivateMessageTap();
+    if (!mounted || tap == null) return;
+    await _openPrivateMessageNotification(tap);
+  }
+
+  Future<void> _openPrivateMessageNotification(
+    PrivateMessageNotificationTap tap,
+  ) async {
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null || tap.peerNodeId.isEmpty) return;
+    final state = ref.read(chatControllerProvider);
+    final peer = state.peers.cast<MeshPeer?>().firstWhere(
+      (p) => p?.nodeId == tap.peerNodeId,
+      orElse: () => null,
+    );
+    ref
+        .read(chatControllerProvider.notifier)
+        .selectConversation(
+          PrivateConversation(
+            peerNodeId: tap.peerNodeId,
+            peerName: peer?.displayName ?? tap.peerName,
+          ),
+        );
+    await navigator.pushNamed(AppRouter.chat);
   }
 
   Future<void> _showIncomingInvitePrompt() async {

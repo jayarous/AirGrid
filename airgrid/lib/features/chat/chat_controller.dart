@@ -471,10 +471,13 @@ class ChatController extends Notifier<ChatState> {
         }
         // Schedule background/debounced pruning so bursts don't run deletes repeatedly.
         _schedulePrune();
-        if (!isWalkieMessage && _shouldNotifyForPrivateMessage(msg)) {
+        if (!isWalkieMessage &&
+            incomingPrivateNodeId != null &&
+            _shouldNotifyForPrivateMessage(msg)) {
           unawaited(
             _foreground.showPrivateMessageNotification(
-              msg.peerName ?? msg.senderName,
+              peerNodeId: incomingPrivateNodeId,
+              senderName: msg.peerName ?? msg.senderName,
             ),
           );
         }

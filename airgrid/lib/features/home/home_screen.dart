@@ -65,6 +65,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     await _refreshPermissionStatus();
   }
 
+  Future<void> _openPermissionSettings() async {
+    await Navigator.of(context).pushNamed(
+      AppRouter.settings,
+      arguments: AppRouter.settingsSectionPermissions,
+    );
+    if (!mounted) return;
+    await _refreshPermissionStatus();
+  }
+
   Future<void> _resolvePlayServices() async {
     final state = ref.read(chatControllerProvider);
     final resolved = await ref
@@ -320,7 +329,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 message:
                     'Bluetooth and Wi-Fi access are required before nearby devices can join your mesh.',
                 actionLabel: 'Fix',
-                onAction: _openSettings,
+                onAction: _openPermissionSettings,
               ),
               const SizedBox(height: 12),
             ],

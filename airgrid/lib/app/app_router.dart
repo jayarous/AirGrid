@@ -20,6 +20,7 @@ class AppRouter {
   static const String nearby = '/nearby';
   static const String walkie = '/walkie';
   static const String settings = '/settings';
+  static const String settingsSectionPermissions = 'permissions';
   static const String profileEdit = '/settings/profile';
   static const String trustedContacts = '/settings/trusted';
   static const String reports = '/settings/reports';
@@ -54,7 +55,9 @@ class AppRouter {
         );
       case AppRouter.settings:
         return MaterialPageRoute(
-          builder: (_) => const SettingsScreen(),
+          builder: (_) => SettingsScreen(
+            focusPermissions: settings.arguments == settingsSectionPermissions,
+          ),
           settings: settings,
         );
       case profileEdit:

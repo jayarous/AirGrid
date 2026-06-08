@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/legal_text.dart';
+import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/validation.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:flutter/material.dart';
@@ -156,6 +157,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     final identity = ref.read(localIdentityStoreProvider);
     await identity.acceptTerms(LegalText.termsVersion);
     await identity.saveDisplayName(validation.sanitizedValue!);
+    await ref.read(meshPermissionsProvider).requestMeshPermissions();
     if (!mounted) return;
     unawaited(Navigator.of(context).pushReplacementNamed(AppRouter.home));
   }

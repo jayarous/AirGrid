@@ -17,7 +17,9 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key});
+  final bool focusPermissions;
+
+  const SettingsScreen({super.key, this.focusPermissions = false});
 
   @override
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
@@ -25,6 +27,8 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen>
     with WidgetsBindingObserver {
+  final _scrollController = ScrollController();
+  final _permissionsKey = GlobalKey();
   bool _requestingPermissions = false;
   double _smoothingAlpha = nearbyDefaultSmoothingAlpha;
   SharedPreferences? _prefs;
@@ -39,6 +43,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     _permissionsFuture = _loadPermissions();
     _playServicesFuture = _loadPlayServices();
     _packageInfoFuture = PackageInfo.fromPlatform();
+    if (widget.focusPermissions) {
+      _schedulePermissionsFocus();
+    }
     SharedPreferences.getInstance().then((prefs) {
       if (!mounted) return;
       setState(() {
@@ -51,7 +58,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  void _schedulePermissionsFocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollToPermissions();
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) _scrollToPermissions();
+      });
+    });
+  }
+
+  void _scrollToPermissions() {
+    final context = _permissionsKey.currentContext;
+    if (context == null) return;
+    Scrollable.ensureVisible(
+      context,
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+      alignment: 0.08,
+    );
   }
 
   @override
@@ -228,6 +257,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         actions: const [PublicWalkieStatusIcon()],
       ),
       body: ListView(
+        controller: _scrollController,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
         children: [
           _ProfileCard(
@@ -377,6 +407,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 },
               ),
               FutureBuilder<MeshPermissionsSnapshot>(
+                key: _permissionsKey,
                 future: _permissionsFuture,
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {

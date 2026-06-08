@@ -22,23 +22,19 @@ class PublicWalkieStatusIcon extends ConsumerWidget {
       message: active
           ? 'Turn public walkie offline (Long press to open Walkie)'
           : 'Turn public walkie online (Long press to open Walkie)',
-      child: GestureDetector(
+      child: InkResponse(
+        radius: 24,
+        onTap: () {
+          ref
+              .read(chatControllerProvider.notifier)
+              .setPublicWalkieStayOnline(!active);
+        },
         onLongPress: () {
           Navigator.of(context).pushNamed(AppRouter.walkie);
         },
-        child: IconButton(
-          tooltip: active
-              ? 'Turn public walkie offline'
-              : 'Turn public walkie online',
-          onPressed: () {
-            ref
-                .read(chatControllerProvider.notifier)
-                .setPublicWalkieStayOnline(!active);
-          },
-          splashRadius: 24,
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          constraints: const BoxConstraints(),
-          icon: Icon(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Icon(
             Icons.wifi_tethering_rounded,
             color: active ? Colors.green.shade600 : Colors.grey.shade500,
             size: 22,

@@ -7,11 +7,11 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('defaults battery optimization to enabled', () async {
+  test('defaults battery optimization to disabled', () async {
     final store = await SharedPrefsBatterySettingsStore.create();
 
-    expect(await store.getBatteryOptimizationEnabled(), isTrue);
-    expect(store.batteryOptimizationEnabled, isTrue);
+    expect(await store.getBatteryOptimizationEnabled(), isFalse);
+    expect(store.batteryOptimizationEnabled, isFalse);
   });
 
   test('persists battery optimization setting', () async {

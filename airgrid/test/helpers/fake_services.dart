@@ -38,7 +38,18 @@ class FakeForegroundService implements MeshForegroundService {
   Future<bool> consumePendingExitAction() async => false;
 
   @override
-  Future<void> showPrivateMessageNotification(String senderName) async {}
+  Future<PrivateMessageNotificationTap?>
+  consumePendingPrivateMessageTap() async => null;
+
+  @override
+  Stream<PrivateMessageNotificationTap> get privateMessageNotificationTaps =>
+      const Stream.empty();
+
+  @override
+  Future<void> showPrivateMessageNotification({
+    required String peerNodeId,
+    required String senderName,
+  }) async {}
 
   @override
   Future<void> startMeshService() async {

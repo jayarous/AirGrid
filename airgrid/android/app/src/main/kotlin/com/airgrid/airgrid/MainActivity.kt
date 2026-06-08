@@ -26,9 +26,12 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         const val ACTION_EXIT_MESH = "com.airgrid.app.action.EXIT_MESH"
-    private const val MESSAGE_CHANNEL_ID = "airgrid_messages"
-    private const val PRIVATE_MESSAGE_NOTIFICATION_ID = 2001
-    private const val PLAY_SERVICES_RESOLUTION_REQUEST = 9001
+        private const val ACTION_OPEN_PRIVATE_MESSAGE = "com.airgrid.app.action.OPEN_PRIVATE_MESSAGE"
+        private const val EXTRA_PEER_NODE_ID = "peerNodeId"
+        private const val EXTRA_PEER_NAME = "peerName"
+        private const val MESSAGE_CHANNEL_ID = "airgrid_messages"
+        private const val PRIVATE_MESSAGE_NOTIFICATION_ID = 2001
+        private const val PLAY_SERVICES_RESOLUTION_REQUEST = 9001
     }
 
     private val foregroundChannelName = "com.airgrid/foreground"
@@ -47,6 +50,7 @@ class MainActivity : FlutterActivity() {
     private var previousSpeakerphoneOn: Boolean? = null
     private var riderWriteCount = 0
     private var pendingExitAction = false
+    private var pendingPrivateMessageTap: HashMap<String, Any>? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -81,8 +85,18 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "showPrivateMessageNotification" -> {
+                    val peerNodeId = call.argument<String>("peerNodeId") ?: ""
                     val senderName = call.argument<String>("senderName") ?: "Someone"
-                    showPrivateMessageNotification(senderName)
+                    showPrivateMessageNotification(peerNodeId, senderName)
+                    result.success(null)
+                }
+                "consumePendingPrivateMessageTap" -> {
+                    val pending = pendingPrivateMessageTap
+                    pendingPrivateMessageTap = null
+                    result.success(pending)
+                }
+                "ackPrivateMessageNotificationTap" -> {
+                    pendingPrivateMessageTap = null
                     result.success(null)
                 }
                 "startRiderService" -> {
@@ -210,6 +224,17 @@ class MainActivity : FlutterActivity() {
             foregroundChannel?.invokeMethod("riderEnd", null)
             return
         }
+        if (action == ACTION_OPEN_PRIVATE_MESSAGE) {
+            val peerNodeId = intent.getStringExtra(EXTRA_PEER_NODE_ID) ?: return
+            val peerName = intent.getStringExtra(EXTRA_PEER_NAME) ?: "Private chat"
+            val payload = hashMapOf<String, Any>(
+                "peerNodeId" to peerNodeId,
+                "peerName" to peerName,
+            )
+            pendingPrivateMessageTap = payload
+            foregroundChannel?.invokeMethod("privateMessageNotificationTapped", payload)
+            return
+        }
         if (action != ACTION_EXIT_MESH) return
         pendingExitAction = true
         foregroundChannel?.invokeMethod("exitMesh", null)
@@ -312,11 +337,14 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    private fun showPrivateMessageNotification(senderName: String) {
+    private fun showPrivateMessageNotification(peerNodeId: String, senderName: String) {
         createMessageNotificationChannel()
 
         val openIntent = Intent(this, MainActivity::class.java).apply {
+            action = ACTION_OPEN_PRIVATE_MESSAGE
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_PEER_NODE_ID, peerNodeId)
+            putExtra(EXTRA_PEER_NAME, senderName)
         }
         val pendingFlags =
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
