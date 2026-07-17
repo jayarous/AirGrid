@@ -10,6 +10,7 @@ import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
+import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/walkie/walkie_screen.dart';
 import 'package:flutter/material.dart';
@@ -44,6 +45,24 @@ class _NoopMessageRepository implements MessageRepository {
   Future<void> updateStatus(String messageId, DeliveryStatus status) async {}
 }
 
+/// Seeds [ChatState.selectedConversation] before [WalkieScreen] mounts.
+///
+/// The screen derives its initial Public/Private mode from that value once,
+/// in `initState`. Overriding the controller this way lets tests land on a
+/// pre-chosen private target from the start (mirroring, e.g., navigating in
+/// from the Nearby screen) instead of calling `selectConversation` after the
+/// screen has already initialized in Public mode.
+class _SeededChatController extends ChatController {
+  _SeededChatController(this._initialConversation);
+
+  final ConversationTarget _initialConversation;
+
+  @override
+  ChatState build() {
+    return super.build().copyWith(selectedConversation: _initialConversation);
+  }
+}
+
 Future<LocalIdentityStore> _identity() async {
   SharedPreferences.setMockInitialValues({
     'airgrid_node_id': 'local-node',
@@ -58,6 +77,7 @@ Future<void> _pumpWalkie(
   FakeTransport? transport,
   FakeForegroundService? foreground,
   KnownContactStore? knownContactStore,
+  ConversationTarget? initialConversation,
 }) async {
   final fg = foreground ?? FakeForegroundService();
   final tx = transport ?? FakeTransport();
@@ -84,10 +104,23 @@ Future<void> _pumpWalkie(
         batterySettingsStoreProvider.overrideWithValue(
           InMemoryBatterySettingsStore(),
         ),
+        if (initialConversation != null)
+          chatControllerProvider.overrideWith(
+            () => _SeededChatController(initialConversation),
+          ),
       ],
       child: const MaterialApp(home: WalkieScreen()),
     ),
   );
+  await tester.pumpAndSettle();
+}
+
+/// Taps the "Private" entry in the walkie mode selector. This is the only
+/// way to reach `_isPublicMode == false` with no target chosen, since
+/// [ConversationTarget] has no "nothing selected" variant distinct from
+/// [PublicConversation] / [PrivateConversation].
+Future<void> _switchToPrivateMode(WidgetTester tester) async {
+  await tester.tap(find.text('Private'));
   await tester.pumpAndSettle();
 }
 
@@ -116,8 +149,14 @@ void main() {
     );
   });
 
-  testWidgets('shows no-target presence state by default', (tester) async {
+  testWidgets('shows no-target presence state in private mode', (
+    tester,
+  ) async {
+    // The screen defaults to Public mode (ChatState.initial() selects the
+    // public conversation), so Private mode with no target must be reached
+    // via the mode selector rather than assumed as the initial state.
     await _pumpWalkie(tester);
+    await _switchToPrivateMode(tester);
 
     expect(find.text('Private target'), findsOneWidget);
     expect(
@@ -128,7 +167,9 @@ void main() {
     expect(find.text('CHOOSE SOMEONE'), findsOneWidget);
   });
 
-  testWidgets('public walkie icon toggles public online state', (tester) async {
+  testWidgets('public walkie icon toggles public online state', (
+    tester,
+  ) async {
     await _pumpWalkie(tester);
 
     final container = ProviderScope.containerOf(
@@ -139,7 +180,9 @@ void main() {
       isFalse,
     );
 
-    await tester.tap(find.byTooltip('Turn public walkie online'));
+    await tester.tap(
+      find.byTooltip('Turn public walkie online (Long press to open Walkie)'),
+    );
     await tester.pumpAndSettle();
 
     expect(
@@ -147,7 +190,11 @@ void main() {
       isTrue,
     );
 
-    await tester.tap(find.byTooltip('Turn public walkie offline'));
+    await tester.tap(
+      find.byTooltip(
+        'Turn public walkie offline (Long press to open Walkie)',
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(
@@ -157,18 +204,16 @@ void main() {
   });
 
   testWidgets('shows selected private target name', (tester) async {
-    await _pumpWalkie(tester);
-
-    final container = ProviderScope.containerOf(
-      tester.element(find.byType(WalkieScreen)),
+    // Seed the private target before mount so `_isPublicMode` initializes to
+    // false and the dynamic action hint (driven by controller state, not by
+    // a one-off `_status` message) is exercised alongside the target card.
+    await _pumpWalkie(
+      tester,
+      initialConversation: const PrivateConversation(
+        peerNodeId: 'peer-1',
+        peerName: 'Alex',
+      ),
     );
-
-    container
-        .read(chatControllerProvider.notifier)
-        .selectConversation(
-          const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
-        );
-    await tester.pump();
 
     expect(find.text('Alex'), findsOneWidget);
     expect(find.text('Alex is not online yet.'), findsWidgets);
@@ -181,19 +226,23 @@ void main() {
   ) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    await _pumpWalkie(tester, transport: transport, foreground: foreground);
+    await _pumpWalkie(
+      tester,
+      transport: transport,
+      foreground: foreground,
+      initialConversation: const PrivateConversation(
+        peerNodeId: 'peer-1',
+        peerName: 'Alex',
+      ),
+    );
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
     );
     final controller = container.read(chatControllerProvider.notifier);
-
     await controller.startMesh();
-    controller.selectConversation(
-      const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
-    );
     transport.connectPeer('endpoint-1', name: 'Alex', nodeId: 'peer-1');
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.text('Invite'), findsOneWidget);
     expect(
@@ -223,6 +272,7 @@ void main() {
     tester,
   ) async {
     await _pumpWalkie(tester);
+    await _switchToPrivateMode(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
@@ -243,17 +293,22 @@ void main() {
     tester,
   ) async {
     await _pumpWalkie(tester);
+    await _switchToPrivateMode(tester);
 
     await tester.tap(find.widgetWithText(FilledButton, 'Choose person'));
     await tester.pump();
 
-    expect(find.text('No online private peers available yet.'), findsOneWidget);
+    expect(
+      find.text('No online private peers available yet.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('invite action is shown for an online peer', (tester) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
     await _pumpWalkie(tester, transport: transport, foreground: foreground);
+    await _switchToPrivateMode(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
@@ -272,8 +327,6 @@ void main() {
     tester,
   ) async {
     final contactStore = InMemoryKnownContactStore();
-    await _pumpWalkie(tester, knownContactStore: contactStore);
-
     await contactStore.upsert(
       KnownContact(
         nodeId: 'peer-1',
@@ -283,15 +336,18 @@ void main() {
       ),
     );
 
+    await _pumpWalkie(
+      tester,
+      knownContactStore: contactStore,
+      initialConversation: const PrivateConversation(
+        peerNodeId: 'peer-1',
+        peerName: 'Alex',
+      ),
+    );
+
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
     );
-    container
-        .read(chatControllerProvider.notifier)
-        .selectConversation(
-          const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
-        );
-    await tester.pumpAndSettle();
 
     final stayOnlineButton = tester.widget<FilledButton>(
       find.widgetWithText(FilledButton, 'Offline'),

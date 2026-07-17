@@ -40,17 +40,13 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   final DateTime _openedAt = DateTime.now();
   final Stopwatch _holdStopwatch = Stopwatch();
   final Set<String> _handledIncomingWalkieIds = <String>{};
-  late final FixedExtentScrollController _channelWheelController;
   late final AnimationController _speakerPulseController;
   late final Animation<double> _speakerPulse;
-  Timer? _channelDetentFlashTimer;
   Timer? _ticker;
   AudioPlayer? _incomingPlayer;
 
   Duration _elapsed = Duration.zero;
   String? _status;
-  bool _channelDetentFlash = false;
-  int _lastChannelWheelIndex = 0;
 
   /// When true the user is in open public-channel broadcast mode.
   /// When false (default) the private invite/session flow is active.
@@ -62,11 +58,11 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     super.initState();
     final selectedConv = ref.read(chatControllerProvider).selectedConversation;
     _isPublicMode = selectedConv is PublicConversation;
+    // Restore rider mode from the controller so re-entering the screen doesn't
+    // silently drop an armed rider session (leaving isArmed latched).
+    _isRiderMode =
+        !_isPublicMode && ref.read(riderModeControllerProvider).isArmed;
 
-    _lastChannelWheelIndex = _isPublicMode ? 1 : 0;
-    _channelWheelController = FixedExtentScrollController(
-      initialItem: _isPublicMode ? 1 : 0,
-    );
     _speakerPulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 760),
@@ -121,12 +117,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     } catch (_) {
       // Provider scopes may already be tearing down in widget tests/navigation.
     }
-    _channelDetentFlashTimer?.cancel();
     _ticker?.cancel();
     unawaited(_incomingPlayer?.dispose() ?? Future<void>.value());
     unawaited(_audioRecorder.dispose());
     _speakerPulseController.dispose();
-    _channelWheelController.dispose();
     super.dispose();
   }
 
@@ -142,21 +136,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       _speakerPulseController.stop();
       _speakerPulseController.value = 0;
     }
-  }
-
-  void _triggerChannelDetentFeedback() {
-    _triggerButtonFeedback();
-    if (!mounted) return;
-    _channelDetentFlashTimer?.cancel();
-    setState(() {
-      _channelDetentFlash = true;
-    });
-    _channelDetentFlashTimer = Timer(const Duration(milliseconds: 110), () {
-      if (!mounted) return;
-      setState(() {
-        _channelDetentFlash = false;
-      });
-    });
   }
 
   void _triggerButtonFeedback() {
@@ -294,6 +273,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     }
   }
 
+  /// Resolves the current private walkie target without mutating state.
+  ///
+  /// Returns the selected [PrivateConversation], or reconstructs one from the
+  /// rider/latched [ChatState.walkiePeerNodeId] if a peer for it is online.
+  /// Returns null when no target is chosen — callers surface a "choose a peer"
+  /// prompt rather than silently latching onto an arbitrary online peer.
   PrivateConversation? _currentTarget() {
     final state = ref.read(chatControllerProvider);
     final selected = state.selectedConversation;
@@ -301,20 +286,14 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       return selected;
     }
 
-    final firstOnline = state.peers.cast<MeshPeer?>().firstWhere(
-      (peer) => peer?.nodeId != null,
-      orElse: () => null,
-    );
-    if (firstOnline == null || firstOnline.nodeId == null) {
+    final peer = _peerByNodeId(state.walkiePeerNodeId);
+    if (peer == null || peer.nodeId == null) {
       return null;
     }
-
-    final target = PrivateConversation(
-      peerNodeId: firstOnline.nodeId!,
-      peerName: firstOnline.displayName,
+    return PrivateConversation(
+      peerNodeId: peer.nodeId!,
+      peerName: peer.displayName,
     );
-    ref.read(chatControllerProvider.notifier).selectConversation(target);
-    return target;
   }
 
   MeshPeer? _peerByNodeId(String? nodeId) {
@@ -623,59 +602,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
   }
 
-  Future<void> _showAcceptInviteDialog(MeshPeer invitePeer) async {
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0F1724),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Text('Accept walkie invite'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Incoming private walkie invite from ${invitePeer.displayName}.',
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Icon(Icons.person_pin, color: Color(0xFFF4D35E)),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    invitePeer.displayName,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFF4D35E),
-              foregroundColor: Colors.black,
-            ),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Accept invite'),
-          ),
-        ],
-      ),
-    );
-    if (accepted == true) {
-      _setStatus('Accepting walkie invite...');
-      await ref.read(chatControllerProvider.notifier).acceptWalkieInvite();
-    } else if (accepted == false) {
-      _setStatus('Walkie invite dismissed');
-    }
-  }
-
   Future<void> _startHoldRecording() async {
     _triggerButtonFeedback();
     final current = ref.read(chatControllerProvider);
@@ -701,6 +627,26 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       }
 
       if (current.walkieSessionActivePeerNodeId != target.peerNodeId) {
+        // No active session yet. For trusted always-on contacts, transparently
+        // re-invite so pressing PTT reconnects instead of dead-ending on an
+        // error. For everyone else, ask the user to invite and wait for accept.
+        final contact = current.knownContacts.cast<KnownContact?>().firstWhere(
+          (item) => item?.nodeId == target.peerNodeId,
+          orElse: () => null,
+        );
+        final canAutoInvite =
+            contact != null && contact.isTrusted && contact.walkieAlwaysOn;
+        if (canAutoInvite) {
+          if (current.walkieInvitePeerNodeId != target.peerNodeId) {
+            final peer = _peerByNodeId(target.peerNodeId);
+            if (peer != null) {
+              unawaited(_invitePeer(peer));
+            }
+          }
+          _setStatus('Reconnecting walkie... invite sent');
+          return;
+        }
+
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -715,20 +661,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         return;
       }
       peerNodeIdForSession = target.peerNodeId;
-
-      final contact = current.knownContacts.cast<KnownContact?>().firstWhere(
-        (item) => item?.nodeId == target.peerNodeId,
-        orElse: () => null,
-      );
-      if (contact != null && contact.isTrusted && contact.walkieAlwaysOn) {
-        if (current.walkieInvitePeerNodeId != target.peerNodeId &&
-            current.walkieSessionActivePeerNodeId != target.peerNodeId) {
-          final peer = _peerByNodeId(target.peerNodeId);
-          if (peer != null) {
-            unawaited(_invitePeer(peer));
-          }
-        }
-      }
     }
 
     final micPermission = await Permission.microphone.request();
@@ -807,6 +739,20 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     });
   }
 
+  /// Best-effort deletion of a recorded walkie temp file. No-op on null/empty
+  /// paths; swallows filesystem errors since cleanup must never block the flow.
+  Future<void> _deleteRecordedFile(String? path) async {
+    if (path == null || path.isEmpty) return;
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {
+      // Best-effort cleanup only.
+    }
+  }
+
   Future<void> _cancelHoldRecording() async {
     if (!ref.read(chatControllerProvider).walkieIsTransmitting) return;
     _ticker?.cancel();
@@ -822,16 +768,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       path = null;
     }
 
-    if (path != null && path.isNotEmpty) {
-      try {
-        final file = File(path);
-        if (await file.exists()) {
-          await file.delete();
-        }
-      } catch (_) {
-        // Best-effort cleanup only.
-      }
-    }
+    await _deleteRecordedFile(path);
 
     if (!mounted) return;
     ref
@@ -883,6 +820,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       return;
     }
 
+    // Once a send is attempted the controller owns the temp file (it may
+    // persist the message with localTempPath for playback/retry), so we only
+    // clean up the recording on failures that occur *before* the send.
+    var sendAttempted = false;
     try {
       if (duration < AirGridConstants.kWalkieMinDuration) {
         throw const _WalkieSendException('Clip too short');
@@ -899,7 +840,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       }
 
       final bytes = await file.readAsBytes();
-      if (bytes.isEmpty || bytes.length > AirGridConstants.kWalkieMaxBytes) {
+      if (bytes.isEmpty) {
+        throw const _WalkieSendException('Recording was empty');
+      }
+      if (bytes.length > AirGridConstants.kWalkieMaxBytes) {
         throw const _WalkieSendException('Clip exceeds size limit');
       }
 
@@ -916,6 +860,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       final controller = ref.read(chatControllerProvider.notifier);
       if (_isPublicMode) {
         try {
+          sendAttempted = true;
           await controller.sendPublicWalkieAudio(payload);
         } on StateError catch (e) {
           throw _WalkieSendException(e.message);
@@ -995,7 +940,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        peer.displayName ?? '',
+                        peer.displayName,
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -1038,12 +983,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             .setWalkieLastError('Receiver walkie offline');
 
         // Delete the recorded file since we're not sending it now.
-        try {
-          final f = File(recordedPath);
-          if (await f.exists()) await f.delete();
-        } catch (_) {
-          // ignore
-        }
+        await _deleteRecordedFile(recordedPath);
 
         if (choice == true) {
           // Select the private conversation and open chat.
@@ -1059,6 +999,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         return;
       }
 
+      sendAttempted = true;
       final result = await controller.sendPrivateAudio(
         peer,
         payload,
@@ -1085,6 +1026,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         _status = 'Sent ${_formatDuration(duration)}';
       });
     } on _WalkieSendException catch (e) {
+      if (!sendAttempted) await _deleteRecordedFile(recordedPath);
       if (!mounted) return;
       ref
           .read(chatControllerProvider.notifier)
@@ -1094,6 +1036,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         _status = e.message;
       });
     } catch (_) {
+      if (!sendAttempted) await _deleteRecordedFile(recordedPath);
       if (!mounted) return;
       ref
           .read(chatControllerProvider.notifier)
@@ -1114,908 +1057,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   }
 
   static const Color _radioAmber = Color(0xFFFFA126);
-  static const Color _radioShell = Color(0xFF343A41);
-  static const Color _radioShellDark = Color(0xFF1B1E24);
   static const Color _meshOffFill = Color(0xFF2A3038);
   static const Color _meshOffBorder = Color(0xFF545B66);
   static const Color _meshOffForeground = Color(0xFFB6BDC7);
-
-  Widget _buildMeshControlDeck({
-    required bool meshStarted,
-    required bool isMeshStarting,
-    required bool isAdvertising,
-    required bool isDiscovering,
-    required bool playServicesAvailable,
-    required int peerCount,
-    required bool isDisabled,
-  }) {
-    final controller = ref.read(chatControllerProvider.notifier);
-    final meshBusy = isMeshStarting || isDisabled;
-    final controlsEnabled = meshStarted && playServicesAvailable && !meshBusy;
-
-    void showSnack(String msg) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(msg),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
-
-    // Shared style helpers
-    Widget buildLedDot(bool lit) {
-      final color = lit ? Colors.greenAccent.shade200 : Colors.grey.shade700;
-      return Container(
-        width: 6,
-        height: 6,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-          boxShadow: lit
-              ? [
-                  BoxShadow(
-                    color: Colors.greenAccent.withAlpha(160),
-                    blurRadius: 6,
-                  ),
-                ]
-              : null,
-        ),
-      );
-    }
-
-    Widget buildDeckButton({
-      required String label,
-      required bool isLatched,
-      required bool enabled,
-      required VoidCallback? onTap,
-    }) {
-      final isOn = isLatched && enabled;
-      final fg = isOn
-          ? Colors.greenAccent.shade200
-          : enabled
-          ? _meshOffForeground
-          : Colors.white24;
-      return GestureDetector(
-        onTap: enabled ? onTap : null,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            color: isOn ? const Color(0xFF0D2010) : _meshOffFill,
-            border: Border.all(
-              color: isOn
-                  ? Colors.greenAccent.withAlpha(80)
-                  : _meshOffBorder.withAlpha(enabled ? 150 : 60),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha(80),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              buildLedDot(isOn),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  color: fg,
-                  fontSize: 10,
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.0,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // PWR knob-style button
-    final pwrActive = meshStarted || isMeshStarting;
-    final pwrColor = pwrActive ? _radioAmber : _meshOffForeground;
-    Widget buildPwrButton() {
-      return GestureDetector(
-        onTap: isMeshStarting
-            ? null
-            : () {
-                _triggerButtonFeedback();
-                if (meshStarted) {
-                  _setStatus('Stopping mesh...');
-                  controller.stopMesh();
-                } else {
-                  _setStatus('Starting mesh...');
-                  controller.startMesh();
-                }
-              },
-        child: Container(
-          width: 54,
-          height: 54,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: pwrActive ? const Color(0xFF171B21) : _meshOffFill,
-            border: Border.all(
-              color: pwrActive
-                  ? _radioAmber.withAlpha(160)
-                  : _meshOffBorder.withAlpha(150),
-              width: 1.5,
-            ),
-            boxShadow: [
-              if (pwrActive)
-                BoxShadow(
-                  color: _radioAmber.withAlpha(90),
-                  blurRadius: 12,
-                  spreadRadius: 2,
-                ),
-              BoxShadow(
-                color: Colors.black.withAlpha(100),
-                blurRadius: 6,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.power_settings_new,
-                size: 20,
-                color: isMeshStarting ? _radioAmber.withAlpha(140) : pwrColor,
-              ),
-              const SizedBox(height: 2),
-              Text(
-                'PWR',
-                style: TextStyle(
-                  color: isMeshStarting ? _radioAmber.withAlpha(180) : pwrColor,
-                  fontSize: 9,
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.0,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // PEERS LCD badge
-    final peersColor = peerCount > 0
-        ? Colors.greenAccent.shade200
-        : _radioAmber;
-    Widget buildPeersBadge() {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          color: const Color(0xFF0A0D10),
-          border: Border.all(color: _radioAmber.withAlpha(50)),
-          boxShadow: [
-            BoxShadow(
-              color: _radioAmber.withAlpha(20),
-              blurRadius: 8,
-              spreadRadius: 1,
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              peerCount.toString().padLeft(2, '0'),
-              style: TextStyle(
-                color: peersColor,
-                fontSize: 16,
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.w700,
-                shadows: [
-                  Shadow(color: peersColor.withAlpha(160), blurRadius: 8),
-                ],
-              ),
-            ),
-            Text(
-              'PEERS',
-              style: TextStyle(
-                color: peersColor.withAlpha(180),
-                fontSize: 9,
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.0,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        color: const Color(0xFF0E1116),
-        border: Border.all(color: Colors.white.withAlpha(18)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(80),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          buildPwrButton(),
-          const SizedBox(width: 8),
-          buildDeckButton(
-            label: 'SCAN',
-            isLatched: isDiscovering,
-            enabled: controlsEnabled,
-            onTap: () {
-              _triggerButtonFeedback();
-              final next = !isDiscovering;
-              _setStatus(next ? 'Scanning turned on' : 'Scanning turned off');
-              controller.setDiscoveryEnabled(next);
-              if (next) showSnack('Scanning for nearby AirGrid users');
-            },
-          ),
-          const SizedBox(width: 6),
-          buildDeckButton(
-            label: 'AVAIL',
-            isLatched: isAdvertising,
-            enabled: controlsEnabled,
-            onTap: () {
-              _triggerButtonFeedback();
-              final next = !isAdvertising;
-              _setStatus(
-                next ? 'Availability turned on' : 'Availability turned off',
-              );
-              controller.setAdvertisingEnabled(next);
-              if (next) {
-                showSnack('Other AirGrid users nearby can find you');
-              }
-            },
-          ),
-          const SizedBox(width: 6),
-          buildDeckButton(
-            label: 'SYNC',
-            isLatched: false,
-            enabled: meshStarted && !isMeshStarting && !isDisabled,
-            onTap: () {
-              _triggerButtonFeedback();
-              _setStatus('Refreshing nearby peers...');
-              controller.startMesh(forceRestart: true);
-            },
-          ),
-          const SizedBox(width: 8),
-          buildPeersBadge(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHardwareHeader({
-    required bool isPublicMode,
-    required int peerCount,
-    required bool isActive,
-  }) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withAlpha(22)),
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF3C434B), Color(0xFF20242B)],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(80),
-            blurRadius: 14,
-            offset: const Offset(0, 7),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          _buildScrew(),
-          const SizedBox(width: 12),
-          Expanded(child: _buildSpeakerGrille()),
-          const SizedBox(width: 12),
-          _buildControlKnob(
-            label: 'VOL',
-            active: isActive,
-            valueLabel: isPublicMode ? 'PUB' : 'PRI',
-          ),
-          const SizedBox(width: 10),
-          _buildControlKnob(
-            label: 'SQL',
-            active: peerCount > 0,
-            valueLabel: peerCount.toString().padLeft(2, '0'),
-          ),
-          const SizedBox(width: 12),
-          _buildScrew(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSpeakerGrille() {
-    return Container(
-      height: 58,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        color: const Color(0xFF171B21),
-        border: Border.all(color: Colors.black.withAlpha(120)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.white.withAlpha(12),
-            blurRadius: 1,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          for (var i = 0; i < 12; i++) ...[
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(99),
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withAlpha(190),
-                      const Color(0xFF2C333B),
-                      Colors.black.withAlpha(220),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            if (i != 11) const SizedBox(width: 5),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildControlKnob({
-    required String label,
-    required bool active,
-    required String valueLabel,
-  }) {
-    final glow = active ? _radioAmber : Colors.white38;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const RadialGradient(
-              colors: [Color(0xFF505963), Color(0xFF1B2027)],
-            ),
-            border: Border.all(color: Colors.white.withAlpha(36), width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: glow.withAlpha(active ? 85 : 22),
-                blurRadius: active ? 10 : 4,
-                spreadRadius: active ? 1 : 0,
-              ),
-              BoxShadow(
-                color: Colors.black.withAlpha(95),
-                blurRadius: 7,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 6,
-                height: 23,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(99),
-                  color: glow,
-                ),
-              ),
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 7),
-                  child: Text(
-                    valueLabel,
-                    style: TextStyle(
-                      color: Colors.white.withAlpha(180),
-                      fontSize: 8,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 5),
-        Text(
-          label,
-          style: TextStyle(
-            color: Colors.white.withAlpha(150),
-            fontSize: 9,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.8,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildScrew() {
-    return Container(
-      width: 18,
-      height: 18,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: const RadialGradient(
-          colors: [Color(0xFF66707A), Color(0xFF1B2026)],
-        ),
-        border: Border.all(color: Colors.black.withAlpha(140)),
-      ),
-      child: Center(
-        child: Container(
-          width: 12,
-          height: 2,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(99),
-            color: Colors.black.withAlpha(155),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLatchingPushButton({
-    required bool isOn,
-    required bool enabled,
-    required String hintText,
-    required bool openChatEnabled,
-    required bool chatLaunchFlash,
-    required Color pingDotColor,
-    required bool pingEnabled,
-    required VoidCallback? onPressed,
-    required VoidCallback? onOpenChat,
-    required VoidCallback? onPing,
-  }) {
-    final indicatorColor = isOn
-        ? const Color(0xFF57D163)
-        : enabled
-        ? _radioAmber
-        : Colors.grey.shade500;
-    final buttonFill = isOn ? const Color(0xFF2E4A35) : const Color(0xFF2C333D);
-    final buttonTextColor = isOn ? Colors.white : Colors.white.withAlpha(220);
-    final chatDotColor = chatLaunchFlash
-        ? const Color(0xFF57D163)
-        : openChatEnabled
-        ? _radioAmber
-        : Colors.grey.shade500;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              hintText,
-              style: TextStyle(
-                color: Colors.white.withAlpha(enabled ? 180 : 120),
-                fontSize: 12,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 146,
-            child: Column(
-              children: [
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  curve: Curves.easeOut,
-                  margin: EdgeInsets.only(
-                    top: isOn ? 3 : 0,
-                    bottom: isOn ? 0 : 3,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: buttonFill,
-                    border: Border.all(
-                      color: isOn ? Colors.white54 : Colors.white24,
-                    ),
-                    boxShadow: isOn
-                        ? [
-                            BoxShadow(
-                              color: indicatorColor.withAlpha(90),
-                              blurRadius: 10,
-                              spreadRadius: 1,
-                            ),
-                          ]
-                        : [
-                            BoxShadow(
-                              color: Colors.black.withAlpha(70),
-                              blurRadius: 10,
-                              offset: const Offset(0, 5),
-                            ),
-                          ],
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: enabled ? onPressed : null,
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 12,
-                          horizontal: 10,
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Text(
-                                    'ONLINE',
-                                    style: TextStyle(
-                                      color: buttonTextColor,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.5,
-                                    ),
-                                  ),
-                                  Positioned(
-                                    right: 6,
-                                    child: Container(
-                                      width: 10,
-                                      height: 10,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: indicatorColor,
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: indicatorColor.withAlpha(
-                                              130,
-                                            ),
-                                            blurRadius: 6,
-                                            spreadRadius: 1,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  curve: Curves.easeOut,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: const Color(0xFF2C333D),
-                    border: Border.all(color: Colors.white24),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withAlpha(70),
-                        blurRadius: 10,
-                        offset: const Offset(0, 5),
-                      ),
-                    ],
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: openChatEnabled ? onOpenChat : null,
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 12,
-                          horizontal: 10,
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Text(
-                                    'CHAT',
-                                    style: TextStyle(
-                                      color: Colors.white.withAlpha(220),
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.4,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  Positioned(
-                                    right: 6,
-                                    child: Container(
-                                      width: 10,
-                                      height: 10,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: chatDotColor,
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: chatDotColor.withAlpha(130),
-                                            blurRadius: 6,
-                                            spreadRadius: 1,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  curve: Curves.easeOut,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: const Color(0xFF2C333D),
-                    border: Border.all(color: Colors.white24),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withAlpha(70),
-                        blurRadius: 10,
-                        offset: const Offset(0, 5),
-                      ),
-                    ],
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: pingEnabled ? onPing : null,
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 12,
-                          horizontal: 10,
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Text(
-                                    'PING',
-                                    style: TextStyle(
-                                      color: Colors.white.withAlpha(220),
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.4,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  Positioned(
-                                    right: 6,
-                                    child: Container(
-                                      width: 10,
-                                      height: 10,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: pingDotColor,
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: pingDotColor.withAlpha(130),
-                                            blurRadius: 6,
-                                            spreadRadius: 1,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildChannelSelector({
-    required bool isLocked,
-    required List<_ChannelWheelEntry> entries,
-    required int selectedIndex,
-    required String selectedDescription,
-    required ValueChanged<int> onSelectIndex,
-  }) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_channelWheelController.hasClients) return;
-      final current = _channelWheelController.selectedItem;
-      if (current == selectedIndex) return;
-      _channelWheelController.jumpToItem(selectedIndex);
-      _lastChannelWheelIndex = selectedIndex;
-    });
-
-    Future<void> snapBackToCurrent() async {
-      if (!_channelWheelController.hasClients) return;
-      await _channelWheelController.animateToItem(
-        selectedIndex,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withAlpha(26)),
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_radioShell, _radioShellDark],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(72),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'CHANNEL SELECT',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white.withAlpha(210),
-              letterSpacing: 1.1,
-              fontWeight: FontWeight.w700,
-              fontSize: 12,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            height: 106,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withAlpha(24)),
-              gradient: const LinearGradient(
-                colors: [Color(0xFF0D1117), Color(0xFF04060A)],
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.unfold_more_rounded,
-                  color: Colors.white.withAlpha(130),
-                ),
-                Expanded(
-                  child: AbsorbPointer(
-                    absorbing: isLocked,
-                    child: ListWheelScrollView.useDelegate(
-                      controller: _channelWheelController,
-                      itemExtent: 44,
-                      diameterRatio: 1.5,
-                      physics: const FixedExtentScrollPhysics(),
-                      onSelectedItemChanged: (index) {
-                        if (index < 0 || index >= entries.length) return;
-                        if (index == _lastChannelWheelIndex) return;
-                        _lastChannelWheelIndex = index;
-                        if (isLocked) {
-                          unawaited(snapBackToCurrent());
-                          return;
-                        }
-                        _triggerChannelDetentFeedback();
-                        onSelectIndex(index);
-                      },
-                      childDelegate: ListWheelChildBuilderDelegate(
-                        childCount: entries.length,
-                        builder: (context, index) {
-                          final item = entries[index];
-                          final selected = index == selectedIndex;
-                          return Center(
-                            child: AnimatedOpacity(
-                              duration: const Duration(milliseconds: 120),
-                              opacity: selected ? 1 : 0.55,
-                              child: Text(
-                                'CH-${item.number.toString().padLeft(2, '0')}  ${item.displayName}',
-                                style: TextStyle(
-                                  color: selected
-                                      ? _radioAmber
-                                      : Colors.white.withAlpha(170),
-                                  fontFamily: 'monospace',
-                                  fontSize: selected ? 18 : 16,
-                                  fontWeight: selected
-                                      ? FontWeight.w700
-                                      : FontWeight.w500,
-                                  letterSpacing: 0.8,
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-                Icon(
-                  Icons.unfold_more_rounded,
-                  color: Colors.white.withAlpha(130),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          Center(
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 85),
-              opacity: _channelDetentFlash ? 1 : 0.14,
-              child: Container(
-                width: 52,
-                height: 3,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  color: _radioAmber,
-                  boxShadow: [
-                    BoxShadow(
-                      color: _radioAmber.withAlpha(140),
-                      blurRadius: 7,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            selectedDescription,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white.withAlpha(180), fontSize: 12),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildStatusCard({
     required bool meshStarted,
@@ -2921,188 +1965,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
   }
 
-  Widget _buildSignalBars({required int onlineCount}) {
-    final level = onlineCount <= 0
-        ? 0
-        : onlineCount == 1
-        ? 1
-        : onlineCount <= 3
-        ? 2
-        : onlineCount <= 5
-        ? 3
-        : 4;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: List.generate(5, (index) {
-        final active = index <= level;
-        return Container(
-          width: 8,
-          height: 8 + (index * 5),
-          margin: const EdgeInsets.only(right: 5),
-          decoration: BoxDecoration(
-            color: active ? _radioAmber : _radioAmber.withAlpha(50),
-            borderRadius: BorderRadius.circular(3),
-            boxShadow: active
-                ? [
-                    BoxShadow(
-                      color: _radioAmber.withAlpha(120),
-                      blurRadius: 6,
-                      spreadRadius: 1,
-                    ),
-                  ]
-                : null,
-          ),
-        );
-      }),
-    );
-  }
-
-  Widget _buildDisplayPanel({
-    required String callLabel,
-    required int peerCount,
-    required String? alwaysOnlineLabel,
-    required bool isPublicMode,
-    required bool isTargetOnline,
-    required String linkStatusLabel,
-    required String actionHintLabel,
-    required ThemeData theme,
-  }) {
-    final peerLabelColor = peerCount > 0
-        ? Colors.greenAccent.shade200
-        : _radioAmber;
-    final showOnlineBadge = !isPublicMode && isTargetOnline;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withAlpha(20)),
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF0E1116), Color(0xFF06080D)],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(90),
-            blurRadius: 18,
-            offset: const Offset(0, 10),
-          ),
-          BoxShadow(
-            color: _radioAmber.withAlpha(24),
-            blurRadius: 16,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  callLabel.toUpperCase(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.headlineMedium?.copyWith(
-                    color: _radioAmber,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.2,
-                    shadows: [
-                      Shadow(color: _radioAmber.withAlpha(130), blurRadius: 12),
-                    ],
-                  ),
-                ),
-              ),
-              if (showOnlineBadge) ...[
-                const SizedBox(width: 8),
-                Text(
-                  'ONLINE',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: Colors.greenAccent.shade200,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 14),
-          _buildSignalBars(onlineCount: peerCount),
-          const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.black.withAlpha(80),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _radioAmber.withAlpha(54)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  linkStatusLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: isTargetOnline || isPublicMode
-                        ? Colors.greenAccent.shade200
-                        : _radioAmber,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.4,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  actionHintLabel,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: Colors.white.withAlpha(205),
-                    height: 1.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 28,
-            child: alwaysOnlineLabel == null
-                ? const SizedBox.shrink()
-                : _AutoScrollMarquee(
-                    text: 'Always Online: $alwaysOnlineLabel',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      color: _radioAmber,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.3,
-                      fontSize: 15,
-                    ),
-                  ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Text(
-                'PEERS - $peerCount',
-                style: theme.textTheme.titleSmall?.copyWith(
-                  color: peerLabelColor,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.4,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildPttButton({
     required bool isEnabled,
     required bool isHolding,
@@ -3782,94 +2644,4 @@ class _WalkieSendException implements Exception {
   final String message;
 
   const _WalkieSendException(this.message);
-}
-
-class _ChannelWheelEntry {
-  final int number;
-  final String displayName;
-  final bool isPublic;
-  final String? peerNodeId;
-  final String? peerName;
-
-  const _ChannelWheelEntry({
-    required this.number,
-    required this.displayName,
-    required this.isPublic,
-    this.peerNodeId,
-    this.peerName,
-  });
-}
-
-class _AutoScrollMarquee extends StatefulWidget {
-  final String text;
-  final TextStyle? style;
-
-  const _AutoScrollMarquee({required this.text, this.style});
-
-  @override
-  State<_AutoScrollMarquee> createState() => _AutoScrollMarqueeState();
-}
-
-class _AutoScrollMarqueeState extends State<_AutoScrollMarquee> {
-  final ScrollController _controller = ScrollController();
-  bool _running = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _startIfNeeded();
-    });
-  }
-
-  @override
-  void didUpdateWidget(covariant _AutoScrollMarquee oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _startIfNeeded();
-      });
-    }
-  }
-
-  Future<void> _startIfNeeded() async {
-    if (!mounted || !_controller.hasClients) return;
-    final max = _controller.position.maxScrollExtent;
-    if (max <= 0 || _running) return;
-    _running = true;
-    while (mounted && _running) {
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-      if (!mounted || !_controller.hasClients) break;
-      await _controller.animateTo(
-        max,
-        duration: Duration(milliseconds: (max * 22).clamp(1800, 7000).toInt()),
-        curve: Curves.linear,
-      );
-      if (!mounted || !_controller.hasClients) break;
-      await Future<void>.delayed(const Duration(milliseconds: 550));
-      _controller.jumpTo(0);
-    }
-  }
-
-  @override
-  void dispose() {
-    _running = false;
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRect(
-      child: SingleChildScrollView(
-        controller: _controller,
-        scrollDirection: Axis.horizontal,
-        physics: const NeverScrollableScrollPhysics(),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(widget.text, style: widget.style, maxLines: 1),
-        ),
-      ),
-    );
-  }
 }
