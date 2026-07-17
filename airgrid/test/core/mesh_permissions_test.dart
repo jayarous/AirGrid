@@ -10,16 +10,17 @@ void main() {
       ]);
     });
 
-    test('uses Bluetooth runtime permissions on Android 12', () {
+    test('uses Bluetooth and location runtime permissions on Android 12', () {
       expect(MeshPermissions.criticalPermissionsForAndroidSdk(31), [
         Permission.bluetoothScan,
         Permission.bluetoothAdvertise,
         Permission.bluetoothConnect,
+        Permission.location,
       ]);
     });
 
     test(
-      'uses Bluetooth and Nearby Wi-Fi runtime permissions on Android 13+',
+      'uses Bluetooth, Nearby Wi-Fi, and location runtime permissions on Android 13+',
       () {
         expect(
           MeshPermissions.criticalPermissionsForAndroidSdk(33),

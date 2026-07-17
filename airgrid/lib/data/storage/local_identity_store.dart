@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -51,18 +52,19 @@ class LocalIdentityStore {
   static Future<LocalIdentityStore> create() async {
     final prefs = await SharedPreferences.getInstance();
     const secureStorage = FlutterSecureStorage(
-      aOptions: AndroidOptions(encryptedSharedPreferences: true),
+      aOptions: AndroidOptions(
+        encryptedSharedPreferences: true,
+        resetOnError: true,
+      ),
     );
     final store = LocalIdentityStore._(prefs, secureStorage);
     await store._ensureKeypair();
 
     // Cache keys for synchronous access
-    store._cachedPrivateKeyB64 = await store._secureStorage.read(
-      key: _securePrivateKeyB64,
+    store._cachedPrivateKeyB64 = await store._readSecureKey(
+      _securePrivateKeyB64,
     );
-    store._cachedPublicKeyB64 = await store._secureStorage.read(
-      key: _securePublicKeyB64,
-    );
+    store._cachedPublicKeyB64 = await store._readSecureKey(_securePublicKeyB64);
 
     return store;
   }
@@ -78,13 +80,16 @@ class LocalIdentityStore {
   /// storage, they are migrated without regeneration, then deleted from prefs.
   Future<void> _ensureKeypair() async {
     // Check secure storage first
-    final securePrivate = await _secureStorage.read(key: _securePrivateKeyB64);
-    final securePublic = await _secureStorage.read(key: _securePublicKeyB64);
+    final securePrivate = await _readSecureKey(_securePrivateKeyB64);
+    final securePublic = await _readSecureKey(_securePublicKeyB64);
 
-    if (securePrivate != null && securePublic != null) {
+    if (_isValidKeypair(securePrivate, securePublic)) {
       // Already in secure storage - ensure legacy keys are cleaned up
       await _cleanupLegacyKeys();
       return;
+    }
+    if (securePrivate != null || securePublic != null) {
+      await _resetSecureKeypair();
     }
 
     // Check for legacy keys in SharedPreferences (migration path)
@@ -119,6 +124,41 @@ class LocalIdentityStore {
       key: _securePublicKeyB64,
       value: base64Encode(publicKey.bytes),
     );
+  }
+
+  Future<String?> _readSecureKey(String key) async {
+    try {
+      return await _secureStorage.read(key: key);
+    } on PlatformException {
+      await _resetSecureKeypair();
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  Future<void> _resetSecureKeypair() async {
+    try {
+      await _secureStorage.delete(key: _securePrivateKeyB64);
+      await _secureStorage.delete(key: _securePublicKeyB64);
+    } on PlatformException {
+      try {
+        await _secureStorage.deleteAll();
+      } on PlatformException {
+        // If Android has already reset encrypted storage, startup can continue
+        // and the next write below will recreate the keypair.
+      }
+    }
+  }
+
+  bool _isValidKeypair(String? privateKeyB64, String? publicKeyB64) {
+    if (privateKeyB64 == null || publicKeyB64 == null) return false;
+    try {
+      return base64Decode(privateKeyB64).length == 32 &&
+          base64Decode(publicKeyB64).length == 32;
+    } on FormatException {
+      return false;
+    }
   }
 
   /// Removes legacy keypair from SharedPreferences after migration.

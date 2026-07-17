@@ -1,11 +1,13 @@
 package com.airgrid.airgrid
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -164,6 +166,7 @@ class MainActivity : FlutterActivity() {
         platformChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "androidSdkInt" -> result.success(Build.VERSION.SDK_INT)
+                "androidPermissionStatuses" -> result.success(androidPermissionStatusMap())
                 else -> result.notImplemented()
             }
         }
@@ -335,6 +338,26 @@ class MainActivity : FlutterActivity() {
             "message" to message,
             "canResolve" to (!available && api.isUserResolvableError(status)),
         )
+    }
+
+    private fun androidPermissionStatusMap(): Map<String, Boolean> {
+        return mapOf(
+            "ACCESS_COARSE_LOCATION" to hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION),
+            "ACCESS_FINE_LOCATION" to hasPermission(Manifest.permission.ACCESS_FINE_LOCATION),
+            "BLUETOOTH_SCAN" to hasPermission(Manifest.permission.BLUETOOTH_SCAN),
+            "BLUETOOTH_ADVERTISE" to hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE),
+            "BLUETOOTH_CONNECT" to hasPermission(Manifest.permission.BLUETOOTH_CONNECT),
+            "NEARBY_WIFI_DEVICES" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                hasPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
+            } else {
+                true
+            },
+        )
+    }
+
+    private fun hasPermission(permission: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun showPrivateMessageNotification(peerNodeId: String, senderName: String) {

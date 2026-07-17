@@ -6,6 +6,8 @@ import 'dart:ui' as ui;
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/constants.dart';
 import 'package:airgrid/core/ephemeral_media_cache.dart';
+import 'package:airgrid/core/help_provider.dart';
+import 'package:airgrid/core/help_target.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
@@ -43,6 +45,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     with WidgetsBindingObserver {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
+  late final FocusNode _inputFocusNode;
   final _imagePicker = ImagePicker();
   final _mediaCache = EphemeralMediaCache();
   final _audioRecorder = AudioRecorder();
@@ -58,6 +61,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   @override
   void initState() {
     super.initState();
+    _inputFocusNode = FocusNode();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -67,10 +71,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     unawaited(_mediaCache.cleanup());
   }
 
+  Future<void> _restoreFocus() async {
+    // Restore focus after a short delay to allow the widget tree to stabilize
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    if (!mounted || _isRecordingVoice) return;
+    _inputFocusNode.requestFocus();
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _inputController.dispose();
+    _inputFocusNode.dispose();
     _scrollController.dispose();
     _voiceTicker?.cancel();
     unawaited(_audioRecorder.dispose());
@@ -204,6 +216,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         ),
       );
     }
+    
+    await _restoreFocus();
   }
 
   MeshPeer? _resolvePrivatePeer(ChatState chatState, PrivateConversation conv) {
@@ -1226,6 +1240,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             ),
           ),
           const PublicWalkieStatusIcon(),
+          Consumer(
+            builder: (context, ref, _) {
+              final helpMode = ref.watch(helpModeProvider);
+              return IconButton(
+                icon: Icon(helpMode ? Icons.help : Icons.help_outline),
+                tooltip: helpMode ? 'Exit help mode' : 'Help',
+                onPressed: () =>
+                    ref.read(helpModeProvider.notifier).state = !helpMode,
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
@@ -1447,7 +1472,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final compactHeight = constraints.maxHeight < 540;
+          final compactHeight = media.size.height < 540;
           final meshStatusMaxHeight = media.viewInsets.bottom > 0
               ? (constraints.maxHeight * 0.22).clamp(90.0, 160.0)
               : (constraints.maxHeight * 0.30).clamp(110.0, 220.0);
@@ -1495,17 +1520,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               Expanded(
                 child: _MessageList(scrollController: _scrollController),
               ),
-              if (!compactHeight) const _ConversationPicker(),
-              _InputBar(
-                controller: _inputController,
-                onSend: _send,
-                onOpenAttachmentMenu: _showAttachmentMenu,
-                onToggleVoiceRecording: _handleVoiceControlTap,
-                onCancelVoiceRecording: _cancelVoiceRecording,
-                isRecordingVoice: _isRecordingVoice,
-                isVoiceRecordingPaused: _isVoiceRecordingPaused,
-                onSendVoiceRecording: _stopAndSendVoiceNote,
-                voiceRecordingElapsed: _voiceRecordingElapsed,
+              if (!compactHeight)
+                HelpTarget(
+                  title: 'Conversation Selector',
+                  description:
+                      'Switch between Public Chat (broadcast to all nearby) '
+                      'and Private Chats (direct, encrypted messages to specific peers). '
+                      'Private chats are indicated by a lock icon.',
+                  child: const _ConversationPicker(),
+                ),
+              HelpTarget(
+                title: 'Chat Input',
+                description:
+                    'Type a message and tap Send. '
+                    'Use the attachment button (📎) to share photos or files in private chats. '
+                    'Tap the microphone to record and send a voice note.',
+                child: _InputBar(
+                  controller: _inputController,
+                  focusNode: _inputFocusNode,
+                  onSend: _send,
+                  onOpenAttachmentMenu: _showAttachmentMenu,
+                  onToggleVoiceRecording: _handleVoiceControlTap,
+                  onCancelVoiceRecording: _cancelVoiceRecording,
+                  isRecordingVoice: _isRecordingVoice,
+                  isVoiceRecordingPaused: _isVoiceRecordingPaused,
+                  onSendVoiceRecording: _stopAndSendVoiceNote,
+                  voiceRecordingElapsed: _voiceRecordingElapsed,
+                ),
               ),
             ],
           );
@@ -1572,7 +1613,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       },
     );
 
-    if (!mounted || choice == null) return;
+    if (!mounted || choice == null) {
+      await _restoreFocus();
+      return;
+    }
 
     switch (choice) {
       case _AttachmentChoice.voice:
@@ -1585,6 +1629,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         await _pickAndSendFile();
         break;
     }
+    
+    await _restoreFocus();
   }
 }
 
@@ -2214,6 +2260,7 @@ class _ConversationChipLabel extends StatelessWidget {
 
 class _InputBar extends StatelessWidget {
   final TextEditingController controller;
+  final FocusNode focusNode;
   final VoidCallback onSend;
   final VoidCallback onOpenAttachmentMenu;
   final VoidCallback onToggleVoiceRecording;
@@ -2225,6 +2272,7 @@ class _InputBar extends StatelessWidget {
 
   const _InputBar({
     required this.controller,
+    required this.focusNode,
     required this.onSend,
     required this.onOpenAttachmentMenu,
     required this.onToggleVoiceRecording,
@@ -2344,6 +2392,7 @@ class _InputBar extends StatelessWidget {
                         Expanded(
                           child: TextField(
                             controller: controller,
+                            focusNode: focusNode,
                             readOnly: isRecordingVoice,
                             minLines: 1,
                             maxLines: 4,

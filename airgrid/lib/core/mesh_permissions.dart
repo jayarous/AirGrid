@@ -38,10 +38,10 @@ class MeshPermissions {
     Permission.bluetoothAdvertise,
     Permission.bluetoothConnect,
     Permission.nearbyWifiDevices,
+    Permission.location,
   ];
 
   static const optionalPermissions = <Permission>[
-    Permission.location,
     Permission.notification,
     Permission.ignoreBatteryOptimizations,
   ];
@@ -60,6 +60,7 @@ class MeshPermissions {
         Permission.bluetoothScan,
         Permission.bluetoothAdvertise,
         Permission.bluetoothConnect,
+        Permission.location,
       ];
     }
     return const [Permission.location];
@@ -84,6 +85,21 @@ class MeshPermissions {
       statuses,
       criticalPermissions: criticalPermissions,
     );
+  }
+
+  Future<Map<String, bool>> androidRuntimePermissionStatuses() async {
+    if (!Platform.isAndroid) return const {};
+    try {
+      final raw = await _platformChannel.invokeMapMethod<Object?, Object?>(
+        'androidPermissionStatuses',
+      );
+      if (raw == null) return const {};
+      return raw.map((key, value) => MapEntry(key.toString(), value == true));
+    } on PlatformException {
+      return const {};
+    } on MissingPluginException {
+      return const {};
+    }
   }
 
   Future<List<Permission>> _criticalPermissionsForCurrentPlatform() async {

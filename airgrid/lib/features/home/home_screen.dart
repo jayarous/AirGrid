@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:airgrid/app/app_router.dart';
+import 'package:airgrid/core/help_provider.dart';
+import 'package:airgrid/core/help_target.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
@@ -242,6 +244,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final isOnline = state.meshStarted;
     final missingPermissions =
         _permissionsSnapshot?.hasMissingCriticalPermissions ?? false;
+    final nearbyIssueMessage = _nearbyIssueMessage(state);
+    final nearbyUnavailable = nearbyIssueMessage != null;
     final recentMessages = state.messages.take(3).toList();
     final unreadPrivateTotal = state.unreadPrivateCounts.values.fold<int>(
       0,
@@ -263,6 +267,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         titleSpacing: 16,
         actions: [
           const PublicWalkieStatusIcon(),
+          Consumer(
+            builder: (context, ref, _) {
+              final helpMode = ref.watch(helpModeProvider);
+              return IconButton(
+                icon: Icon(helpMode ? Icons.help : Icons.help_outline),
+                tooltip: helpMode ? 'Exit help mode' : 'Help',
+                onPressed: () =>
+                    ref.read(helpModeProvider.notifier).state = !helpMode,
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
@@ -333,11 +348,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               ),
               const SizedBox(height: 12),
             ],
-            if (!state.playServicesAvailable) ...[
+            if (nearbyUnavailable) ...[
               _ActionBanner(
                 icon: Icons.error_outline,
                 title: 'Nearby is unavailable',
-                message: state.playServicesMessage,
+                message: nearbyIssueMessage,
                 actionLabel: state.playServicesCanResolve ? 'Fix' : null,
                 onAction: state.playServicesCanResolve
                     ? _resolvePlayServices
@@ -345,28 +360,42 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               ),
               const SizedBox(height: 12),
             ],
-            _MeshOverviewCard(
-              peerCount: state.peers.length,
-              meshStarted: state.meshStarted,
-              isStarting: state.isMeshStarting,
-              isAdvertising: state.isAdvertising,
-              isDiscovering: state.isDiscovering,
-              isBlocked: !state.playServicesAvailable,
-              statusLine: _statusLineFor(state),
-              lastEvent: state.lastEvent,
-              onToggleMesh: state.meshStarted
-                  ? ref.read(chatControllerProvider.notifier).stopMesh
-                  : ref.read(chatControllerProvider.notifier).startMesh,
-              onRefreshPeers: _refreshPeersFromChip,
-              onToggleAdvertising: _toggleHomeAdvertising,
-              onToggleDiscovering: _toggleHomeDiscovering,
+            HelpTarget(
+              title: 'Mesh Status',
+              description:
+                  'Shows your mesh connection status. Toggle the mesh on/off, '
+                  'control whether you are visible (Available) or scanning (Scanning) '
+                  'for nearby peers.',
+              child: _MeshOverviewCard(
+                peerCount: state.peers.length,
+                meshStarted: state.meshStarted,
+                isStarting: state.isMeshStarting,
+                isAdvertising: state.isAdvertising,
+                isDiscovering: state.isDiscovering,
+                isBlocked: nearbyUnavailable,
+                statusLine: _statusLineFor(state),
+                lastEvent: state.lastEvent,
+                onToggleMesh: state.meshStarted
+                    ? ref.read(chatControllerProvider.notifier).stopMesh
+                    : ref.read(chatControllerProvider.notifier).startMesh,
+                onRefreshPeers: _refreshPeersFromChip,
+                onToggleAdvertising: _toggleHomeAdvertising,
+                onToggleDiscovering: _toggleHomeDiscovering,
+              ),
             ),
             const SizedBox(height: 24),
-            _QuickActions(
-              onOpenPublicChat: _openPublicChat,
-              onOpenNearby: () =>
-                  unawaited(Navigator.of(context).pushNamed(AppRouter.nearby)),
-              onOpenWalkie: _openWalkie,
+            HelpTarget(
+              title: 'Quick Actions',
+              description:
+                  'Jump directly to Public Chat, Nearby (radar view of peers), '
+                  'or Walkie (push-to-talk). These are the main ways to interact '
+                  'with other AirGrid users nearby.',
+              child: _QuickActions(
+                onOpenPublicChat: _openPublicChat,
+                onOpenNearby: () => unawaited(
+                    Navigator.of(context).pushNamed(AppRouter.nearby)),
+                onOpenWalkie: _openWalkie,
+              ),
             ),
             if (unreadPrivateTotal > 0) ...[
               const SizedBox(height: 12),
@@ -388,12 +417,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 icon: state.playServicesAvailable
                     ? Icons.travel_explore
                     : Icons.error_outline,
-                title: state.playServicesAvailable
+                title: !nearbyUnavailable
                     ? 'Scanning for devices'
                     : 'Nearby unavailable',
-                message: state.playServicesAvailable
+                message: !nearbyUnavailable
                     ? 'Keep AirGrid open nearby to discover peers.'
-                    : state.playServicesMessage,
+                    : nearbyIssueMessage,
               )
             else
               ...state.peers.map((peer) {
@@ -454,17 +483,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        elevation: 4,
-        hoverElevation: 6,
-        focusElevation: 6,
-        highlightElevation: 8,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        onPressed: _openPublicChat,
-        icon: const Icon(Icons.forum_rounded),
-        label: const Text(
-          'Public Chat',
-          style: TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.2),
+      floatingActionButton: HelpTarget(
+        title: 'Public Chat',
+        description:
+            'Opens the public broadcast chat. Messages sent here are visible '
+            'to all nearby AirGrid users.',
+        child: FloatingActionButton.extended(
+          elevation: 4,
+          hoverElevation: 6,
+          focusElevation: 6,
+          highlightElevation: 8,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          onPressed: _openPublicChat,
+          icon: const Icon(Icons.forum_rounded),
+          label: const Text(
+            'Public Chat',
+            style:
+                TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.2),
+          ),
         ),
       ),
     );
@@ -474,9 +511,37 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 String _statusLineFor(ChatState state) {
   if (state.isMeshStarting) return 'Starting the local mesh...';
   if (!state.playServicesAvailable) return 'Mesh is disabled on this device.';
+  if (_hasTransportStartupFailure(state)) {
+    return 'Nearby transport could not start on this device.';
+  }
   if (!state.meshStarted) return 'Mesh is off.';
   if (state.peers.isEmpty) return 'Broadcasting and scanning nearby.';
   return 'Connected to ${state.peers.length} nearby peer${state.peers.length == 1 ? '' : 's'}.';
+}
+
+bool _hasTransportStartupFailure(ChatState state) {
+  final event = state.lastEvent ?? '';
+  return !state.meshStarted &&
+      (event.startsWith('Mesh startup failed:') ||
+          event.startsWith('Transport error:'));
+}
+
+String? _nearbyIssueMessage(ChatState state) {
+  if (!state.playServicesAvailable) return state.playServicesMessage;
+  if (_hasTransportStartupFailure(state)) {
+    final event = state.lastEvent ?? '';
+    final reason = event
+        .replaceFirst('Mesh startup failed:', '')
+        .replaceFirst('Transport error:', '')
+        .trim();
+    if (reason.contains('MISSING_PERMISSION_ACCESS_COARSE_LOCATION')) {
+      return 'Location permission is required for Nearby discovery on this device. Open Settings, grant Location, then try again.';
+    }
+    return reason.isEmpty
+        ? 'Nearby transport could not start. Check Bluetooth, Wi-Fi, location, and battery restrictions, then try again.'
+        : reason;
+  }
+  return null;
 }
 
 class _MeshOverviewCard extends StatelessWidget {
@@ -662,35 +727,40 @@ class _QuickActions extends StatelessWidget {
   }) {
     final cs = Theme.of(context).colorScheme;
     return Expanded(
-      child: Material(
-        color: isPrimary
-            ? cs.primary
-            : cs.surfaceContainerHighest.withAlpha(150),
-        borderRadius: BorderRadius.circular(20),
-        child: InkWell(
-          onTap: onTap,
+      child: Semantics(
+        label: 'Open $title',
+        hint: 'Navigates to the $title screen',
+        button: true,
+        child: Material(
+          color: isPrimary
+              ? cs.primary
+              : cs.surfaceContainerHighest.withAlpha(150),
           borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  color: isPrimary ? cs.onPrimary : cs.primary,
-                  size: 28,
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: isPrimary ? cs.onPrimary : cs.onSurface,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    letterSpacing: 0.1,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(20),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    icon,
+                    color: isPrimary ? cs.onPrimary : cs.primary,
+                    size: 28,
                   ),
-                ),
-              ],
+                  const SizedBox(height: 10),
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: isPrimary ? cs.onPrimary : cs.onSurface,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      letterSpacing: 0.1,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -771,61 +841,71 @@ class _PeerTile extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final canMessage = peer.nodeId != null;
 
-    return Card(
-      elevation: 0,
-      color: cs.surfaceContainerLowest,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: cs.outlineVariant.withAlpha(50)),
-      ),
-      margin: EdgeInsets.zero,
-      child: ListTile(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        leading: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: canMessage
-                ? cs.primaryContainer
-                : cs.surfaceContainerHighest,
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            canMessage ? Icons.person_rounded : Icons.sync_rounded,
-            color: canMessage ? cs.onPrimaryContainer : cs.onSurfaceVariant,
-          ),
+    return Semantics(
+      label: 'Peer ${peer.displayName}',
+      hint: canMessage
+          ? 'Tap to open private chat. Long press for profile.'
+          : 'Peer is still setting up',
+      button: true,
+      child: Card(
+        elevation: 0,
+        color: cs.surfaceContainerLowest,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: cs.outlineVariant.withAlpha(50)),
         ),
-        title: Text(
-          peer.displayName.isEmpty ? 'Nearby device' : peer.displayName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-        subtitle: Text(
-          peer.encryptionReady
-              ? 'Encrypted private chat ready'
-              : canMessage
-              ? 'Private chat available'
-              : 'Finishing setup',
-          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (unreadCount > 0) ...[
-              _UnreadBadge(count: unreadCount),
-              const SizedBox(width: 8),
-            ],
-            Icon(
-              canMessage
-                  ? Icons.chevron_right_rounded
-                  : Icons.more_horiz_rounded,
-              color: cs.onSurfaceVariant,
+        margin: EdgeInsets.zero,
+        child: ListTile(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          leading: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: canMessage
+                  ? cs.primaryContainer
+                  : cs.surfaceContainerHighest,
+              shape: BoxShape.circle,
             ),
-          ],
+            child: Icon(
+              canMessage ? Icons.person_rounded : Icons.sync_rounded,
+              color: canMessage ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+            ),
+          ),
+          title: Text(
+            peer.displayName.isEmpty ? 'Nearby device' : peer.displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(
+            peer.encryptionReady
+                ? 'Encrypted private chat ready'
+                : canMessage
+                ? 'Private chat available'
+                : 'Finishing setup',
+            style:
+                TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (unreadCount > 0) ...[
+                _UnreadBadge(count: unreadCount),
+                const SizedBox(width: 8),
+              ],
+              Icon(
+                canMessage
+                    ? Icons.chevron_right_rounded
+                    : Icons.more_horiz_rounded,
+                color: cs.onSurfaceVariant,
+              ),
+            ],
+          ),
         ),
       ),
     );

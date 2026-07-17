@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:airgrid/app/app_router.dart';
+import 'package:airgrid/core/help_provider.dart';
+import 'package:airgrid/core/help_target.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/domain/models/local_report.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
@@ -35,7 +37,20 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Nearby'),
-        actions: const [PublicWalkieStatusIcon()],
+        actions: [
+          Consumer(
+            builder: (context, ref, _) {
+              final helpMode = ref.watch(helpModeProvider);
+              return IconButton(
+                icon: Icon(helpMode ? Icons.help : Icons.help_outline),
+                tooltip: helpMode ? 'Exit help mode' : 'Help',
+                onPressed: () =>
+                    ref.read(helpModeProvider.notifier).state = !helpMode,
+              );
+            },
+          ),
+          const PublicWalkieStatusIcon(),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -58,30 +73,51 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
             ).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
           const SizedBox(height: 18),
-          _NearbyRadar(
-            peers: state.peers,
-            localLocation: state.localLocation,
-            peerLocations: state.peerLocations,
-            selectedEndpointId: _selectedEndpointId,
-            onPeerSelected: (peer) {
-              setState(() {
-                _selectedEndpointId = peer.endpointId;
-              });
-            },
+          HelpTarget(
+            title: 'Radar View',
+            description:
+                'Shows nearby AirGrid users as dots on a radar. '
+                'Tap a dot to select a peer. '
+                'The radar uses your device compass to orient the view. '
+                'You can tap a peer to chat or start a walkie session.',
+            child: _NearbyRadar(
+              peers: state.peers,
+              localLocation: state.localLocation,
+              peerLocations: state.peerLocations,
+              selectedEndpointId: _selectedEndpointId,
+              onPeerSelected: (peer) {
+                setState(() {
+                  _selectedEndpointId = peer.endpointId;
+                });
+              },
+            ),
           ),
           const SizedBox(height: 16),
-          _LocationSharingPanel(
-            meshStarted: state.meshStarted,
-            isSharing: state.isLocationSharing,
-            status: state.locationStatus,
-            onToggle: state.isLocationSharing
-                ? ref.read(chatControllerProvider.notifier).stopLocationSharing
-                : ref
-                      .read(chatControllerProvider.notifier)
-                      .startLocationSharing,
+          HelpTarget(
+            title: 'Location Sharing',
+            description:
+                'Toggle live location sharing with nearby peers. '
+                'When enabled, your position is visible on their radar. '
+                'Your location is only shared over the mesh — never sent to the internet.',
+            child: _LocationSharingPanel(
+              meshStarted: state.meshStarted,
+              isSharing: state.isLocationSharing,
+              status: state.locationStatus,
+              onToggle: state.isLocationSharing
+                  ? ref.read(chatControllerProvider.notifier).stopLocationSharing
+                  : ref
+                        .read(chatControllerProvider.notifier)
+                        .startLocationSharing,
+            ),
           ),
           const SizedBox(height: 8),
-          _CompassPreferenceTile(),
+          HelpTarget(
+            title: 'Compass Preference',
+            description:
+                'Choose between your device compass or GPS heading for radar orientation. '
+                'The compass makes the radar match your phone\'s direction.',
+            child: _CompassPreferenceTile(),
+          ),
           const SizedBox(height: 20),
           Text(
             'Online users',
@@ -814,50 +850,57 @@ class _NearbyPeerTile extends StatelessWidget {
     final connectedFor = DateTime.now().difference(peer.connectedAt);
     final locationText = _locationText();
 
-    return ListTile(
-      onTap: onTap,
-      onLongPress: (onBlock != null || onTrust != null || onReport != null)
-          ? () => _showPeerSheet(context)
-          : null,
-      selected: isSelected,
-      tileColor: isSelected ? cs.primaryContainer.withAlpha(50) : null,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(
-          color: isSelected ? cs.primary : cs.outlineVariant,
-          width: isSelected ? 2.0 : 1.0,
+    return Semantics(
+      label: 'Nearby peer ${peer.displayName}',
+      hint: 'Tap to start a private chat. Long press for more options.',
+      button: true,
+      child: ListTile(
+        onTap: onTap,
+        onLongPress: (onBlock != null || onTrust != null || onReport != null)
+            ? () => _showPeerSheet(context)
+            : null,
+        selected: isSelected,
+        tileColor: isSelected ? cs.primaryContainer.withAlpha(50) : null,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(
+            color: isSelected ? cs.primary : cs.outlineVariant,
+            width: isSelected ? 2.0 : 1.0,
+          ),
         ),
-      ),
-      leading: CircleAvatar(
-        backgroundColor: isSelected
-            ? cs.primary
-            : (peer.encryptionReady
-                ? cs.tertiaryContainer
-                : cs.primaryContainer),
-        child: Icon(
-          isSelected
-              ? Icons.person_pin_circle
-              : (peer.encryptionReady ? Icons.lock_outline : Icons.person_pin_circle),
-          color: isSelected
-              ? cs.onPrimary
+        leading: CircleAvatar(
+          backgroundColor: isSelected
+              ? cs.primary
               : (peer.encryptionReady
-                  ? cs.onTertiaryContainer
-                  : cs.onPrimaryContainer),
+                  ? cs.tertiaryContainer
+                  : cs.primaryContainer),
+          child: Icon(
+            isSelected
+                ? Icons.person_pin_circle
+                : (peer.encryptionReady
+                    ? Icons.lock_outline
+                    : Icons.person_pin_circle),
+            color: isSelected
+                ? cs.onPrimary
+                : (peer.encryptionReady
+                    ? cs.onTertiaryContainer
+                    : cs.onPrimaryContainer),
+          ),
         ),
-      ),
-      title: Text(
-        peer.displayName.isEmpty ? 'Nearby device' : peer.displayName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Text(
-        'Online for ${_formatDuration(connectedFor)} • $locationText',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: Icon(
-        peer.nodeId == null ? Icons.more_horiz : Icons.chevron_right,
-        color: cs.onSurfaceVariant,
+        title: Text(
+          peer.displayName.isEmpty ? 'Nearby device' : peer.displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Text(
+          'Online for ${_formatDuration(connectedFor)} • $locationText',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: Icon(
+          peer.nodeId == null ? Icons.more_horiz : Icons.chevron_right,
+          color: cs.onSurfaceVariant,
+        ),
       ),
     );
   }

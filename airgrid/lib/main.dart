@@ -12,10 +12,12 @@ import 'package:airgrid/data/storage/sqlite_message_repository.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/rider/rider_mode_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
   final identityStore = await LocalIdentityStore.create();
   final messageRepo = await SqliteMessageRepository.open();

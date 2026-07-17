@@ -383,7 +383,6 @@ class ChatController extends Notifier<ChatState> {
             meshStarted: false,
             isAdvertising: false,
             isDiscovering: false,
-            playServicesAvailable: false,
             lastEvent: 'Transport error: ${event.reason}',
           );
         }

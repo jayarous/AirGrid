@@ -5,6 +5,8 @@ import 'dart:math' as math;
 
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/constants.dart';
+import 'package:airgrid/core/help_provider.dart';
+import 'package:airgrid/core/help_target.dart';
 import 'package:airgrid/data/storage/rider_mode_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
@@ -2278,58 +2280,64 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       required IconData icon,
       required VoidCallback onTap,
     }) {
-      return AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOut,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          gradient: selected
-              ? const LinearGradient(
-                  colors: [Color(0xFFFFA126), Color(0xFFFFB84D)],
-                )
-              : null,
-          color: selected ? null : Colors.black.withAlpha(70),
-          border: Border.all(
-            color: selected ? Colors.transparent : Colors.white24,
-          ),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: _radioAmber.withAlpha(120),
-                    blurRadius: 12,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : null,
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
+      return Semantics(
+        label: '$label walkie mode',
+        hint: selected ? 'Currently selected' : 'Switch to $label mode',
+        button: true,
+        selected: selected,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      icon,
-                      size: 18,
-                      color: selected ? Colors.black : Colors.white70,
+            gradient: selected
+                ? const LinearGradient(
+                    colors: [Color(0xFFFFA126), Color(0xFFFFB84D)],
+                  )
+                : null,
+            color: selected ? null : Colors.black.withAlpha(70),
+            border: Border.all(
+              color: selected ? Colors.transparent : Colors.white24,
+            ),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: _radioAmber.withAlpha(120),
+                      blurRadius: 12,
+                      spreadRadius: 1,
                     ),
-                    const SizedBox(width: 6),
-                    Text(
-                      label,
-                      maxLines: 1,
-                      style: TextStyle(
+                  ]
+                : null,
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(14),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        icon,
+                        size: 18,
                         color: selected ? Colors.black : Colors.white70,
-                        fontWeight: FontWeight.w700,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 6),
+                      Text(
+                        label,
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: selected ? Colors.black : Colors.white70,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -3108,22 +3116,28 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         ? Colors.redAccent
         : (isEnabled ? _radioAmber : Colors.grey.shade600);
 
-    return GestureDetector(
-      onLongPressStart: isEnabled
-          ? (_) => unawaited(_startHoldRecording())
-          : null,
-      onLongPressEnd: isEnabled ? (_) => unawaited(_stopHoldAndSend()) : null,
-      onLongPressCancel: isEnabled
-          ? () => unawaited(_cancelHoldRecording())
-          : null,
-      onTap: isHolding
-          ? onCancel
-          : !isEnabled
-          ? () {
-              _triggerButtonFeedback();
-              _setStatus(idleLabel);
-            }
-          : null,
+    return Semantics(
+      label: 'Push to talk',
+      hint: isEnabled
+          ? 'Hold and release to send a walkie voice clip'
+          : 'Start a walkie session first',
+      button: true,
+      child: GestureDetector(
+        onLongPressStart: isEnabled
+            ? (_) => unawaited(_startHoldRecording())
+            : null,
+        onLongPressEnd: isEnabled ? (_) => unawaited(_stopHoldAndSend()) : null,
+        onLongPressCancel: isEnabled
+            ? () => unawaited(_cancelHoldRecording())
+            : null,
+        onTap: isHolding
+            ? onCancel
+            : !isEnabled
+            ? () {
+                _triggerButtonFeedback();
+                _setStatus(idleLabel);
+              }
+            : null,
       child: AnimatedBuilder(
         animation: _speakerPulse,
         builder: (context, child) {
@@ -3222,6 +3236,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             ),
           ),
         ),
+      ),
       ),
     );
   }
@@ -3361,7 +3376,20 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           letterSpacing: 0.2,
         ),
         title: const Text('Walkie Talkie'),
-        actions: [const PublicWalkieStatusIcon()],
+        actions: [
+          Consumer(
+            builder: (context, ref, _) {
+              final helpMode = ref.watch(helpModeProvider);
+              return IconButton(
+                icon: Icon(helpMode ? Icons.help : Icons.help_outline),
+                tooltip: helpMode ? 'Exit help mode' : 'Help',
+                onPressed: () =>
+                    ref.read(helpModeProvider.notifier).state = !helpMode,
+              );
+            },
+          ),
+          const PublicWalkieStatusIcon(),
+        ],
       ),
       body: Stack(
         fit: StackFit.expand,
@@ -3466,49 +3494,58 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                     : null,
                               ),
                               const SizedBox(height: 14),
-                              _buildModeSelector(
-                                isPublicMode: _isPublicMode,
-                                isRiderMode: _isRiderMode,
-                                onPrivate: () {
-                                  setState(() {
-                                    _isPublicMode = false;
-                                    _isRiderMode = false;
-                                    _status = 'Private mode selected';
-                                  });
-                                  unawaited(
-                                    ref
-                                        .read(chatControllerProvider.notifier)
-                                        .publishWalkieAvailability(true),
-                                  );
-                                },
-                                onPublic: () {
-                                  setState(() {
-                                    _isPublicMode = true;
-                                    _isRiderMode = false;
-                                    _status = 'Public mode selected';
-                                  });
-                                  unawaited(
-                                    ref
-                                        .read(chatControllerProvider.notifier)
-                                        .publishWalkieAvailability(
-                                          stayOnlineOn,
-                                        ),
-                                  );
-                                },
-                                onRider: () {
-                                  setState(() {
-                                    _isPublicMode = false;
-                                    _isRiderMode = true;
-                                    _status = 'Rider mode selected';
-                                  });
-                                  unawaited(
-                                    ref
-                                        .read(
-                                          riderModeControllerProvider.notifier,
-                                        )
-                                        .armPresence(true),
-                                  );
-                                },
+                              HelpTarget(
+                                title: 'Walkie Mode',
+                                description:
+                                    'Choose how you want to use walkie:\n'
+                                    '• Private: one-to-one session with a specific peer.\n'
+                                    '• Public: broadcast to all nearby AirGrid users.\n'
+                                    '• Rider: hands-free mode with a trusted peer.',
+                                child: _buildModeSelector(
+                                  isPublicMode: _isPublicMode,
+                                  isRiderMode: _isRiderMode,
+                                  onPrivate: () {
+                                    setState(() {
+                                      _isPublicMode = false;
+                                      _isRiderMode = false;
+                                      _status = 'Private mode selected';
+                                    });
+                                    unawaited(
+                                      ref
+                                          .read(chatControllerProvider.notifier)
+                                          .publishWalkieAvailability(true),
+                                    );
+                                  },
+                                  onPublic: () {
+                                    setState(() {
+                                      _isPublicMode = true;
+                                      _isRiderMode = false;
+                                      _status = 'Public mode selected';
+                                    });
+                                    unawaited(
+                                      ref
+                                          .read(chatControllerProvider.notifier)
+                                          .publishWalkieAvailability(
+                                            stayOnlineOn,
+                                          ),
+                                    );
+                                  },
+                                  onRider: () {
+                                    setState(() {
+                                      _isPublicMode = false;
+                                      _isRiderMode = true;
+                                      _status = 'Rider mode selected';
+                                    });
+                                    unawaited(
+                                      ref
+                                          .read(
+                                            riderModeControllerProvider
+                                                .notifier,
+                                          )
+                                          .armPresence(true),
+                                    );
+                                  },
+                                ),
                               ),
                               const SizedBox(height: 14),
                               _buildTargetCard(
@@ -3689,17 +3726,25 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                               const SizedBox(height: 18),
                               if (!_isRiderMode)
                                 Center(
-                                  child: _buildPttButton(
-                                    isEnabled: isActiveSessionForTarget,
-                                    isHolding: isHolding,
-                                    isSending: isSending,
-                                    speakerActive: speakerActive,
-                                    idleLabel: pttIdleLabel,
-                                    size: 220,
-                                    onCancel: isActiveSessionForTarget
-                                        ? () =>
-                                              unawaited(_cancelHoldRecording())
-                                        : null,
+                                  child: HelpTarget(
+                                    title: 'Push to Talk',
+                                    description:
+                                        'Hold the mic button to start recording. '
+                                        'Release to send your walkie voice clip. '
+                                        'Make sure you have an active session '
+                                        '(invite accepted) before using PTT.',
+                                    child: _buildPttButton(
+                                      isEnabled: isActiveSessionForTarget,
+                                      isHolding: isHolding,
+                                      isSending: isSending,
+                                      speakerActive: speakerActive,
+                                      idleLabel: pttIdleLabel,
+                                      size: 220,
+                                      onCancel: isActiveSessionForTarget
+                                          ? () => unawaited(
+                                              _cancelHoldRecording())
+                                          : null,
+                                    ),
                                   ),
                                 ),
                               const SizedBox(height: 12),

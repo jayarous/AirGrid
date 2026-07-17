@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/battery_optimization_bridge.dart';
+import 'package:airgrid/core/help_provider.dart';
+import 'package:airgrid/core/help_target.dart';
+import 'package:airgrid/core/logger.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/domain/models/privacy_mode.dart';
@@ -14,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -235,6 +239,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     }
   }
 
+  Future<void> _shareDiagnostics() async {
+    final info = await _packageInfoFuture;
+    final permissions = await _loadPermissions();
+    final playServices = await _loadPlayServices();
+    final state = ref.read(chatControllerProvider);
+    final meshPermissions = ref.read(meshPermissionsProvider);
+    final nativePermissions = await meshPermissions
+        .androidRuntimePermissionStatuses();
+    final lines = <String>[
+      'AirGrid diagnostics',
+      'Generated: ${DateTime.now().toIso8601String()}',
+      'App: ${info.appName} ${info.version}+${info.buildNumber}',
+      'Platform: ${defaultTargetPlatform.name}',
+      '',
+      'Mesh',
+      'started=${state.meshStarted}',
+      'starting=${state.isMeshStarting}',
+      'advertising=${state.isAdvertising}',
+      'discovering=${state.isDiscovering}',
+      'peerCount=${state.peers.length}',
+      'lastEvent=${state.lastEvent ?? 'none'}',
+      '',
+      'Google Play Services',
+      'available=${playServices.available}',
+      'code=${playServices.code}',
+      'canResolve=${playServices.canResolve}',
+      'message=${playServices.displayMessage}',
+      '',
+      'Permissions',
+      for (final permission in MeshPermissions.allPermissions)
+        '${meshPermissions.labelFor(permission)}=${permissions[permission]?.name ?? 'unknown'}',
+      if (nativePermissions.isNotEmpty) ...[
+        '',
+        'Android permission check',
+        for (final entry in nativePermissions.entries)
+          '${entry.key}=${entry.value}',
+      ],
+      '',
+      'Recent AirGrid logs',
+      ...AirGridLogger.recentEntries(),
+    ];
+    await Share.share(lines.join('\n'));
+  }
+
   @override
   Widget build(BuildContext context) {
     final identity = ref.watch(localIdentityStoreProvider);
@@ -254,7 +302,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
       backgroundColor: cs.surface,
       appBar: AppBar(
         title: const Text('Settings'),
-        actions: const [PublicWalkieStatusIcon()],
+        actions: [
+          Consumer(
+            builder: (context, ref, _) {
+              final helpMode = ref.watch(helpModeProvider);
+              return IconButton(
+                icon: Icon(helpMode ? Icons.help : Icons.help_outline),
+                tooltip: helpMode ? 'Exit help mode' : 'Help',
+                onPressed: () =>
+                    ref.read(helpModeProvider.notifier).state = !helpMode,
+              );
+            },
+          ),
+          const PublicWalkieStatusIcon(),
+        ],
       ),
       body: ListView(
         controller: _scrollController,
@@ -308,39 +369,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   ],
                 ),
               ),
-              _SettingsSwitchRow(
-                icon: Icons.wifi_tethering_rounded,
-                iconColor: state.isAdvertising ? Colors.green : cs.outline,
+              HelpTarget(
                 title: 'Available',
-                subtitle: state.isAdvertising
-                    ? 'Others nearby can find you.'
-                    : 'You are hidden from new nearby discovery.',
-                value: state.playServicesAvailable && state.isAdvertising,
-                onChanged:
-                    state.playServicesAvailable &&
-                        state.meshStarted &&
-                        !state.isMeshStarting
-                    ? (value) => ref
-                          .read(chatControllerProvider.notifier)
-                          .setAdvertisingEnabled(value)
-                    : null,
+                description:
+                    'When enabled, your device is visible to others scanning nearby. '
+                    'Turn off to become hidden from new discovery.',
+                child: _SettingsSwitchRow(
+                  icon: Icons.wifi_tethering_rounded,
+                  iconColor: state.isAdvertising ? Colors.green : cs.outline,
+                  title: 'Available',
+                  subtitle: state.isAdvertising
+                      ? 'Others nearby can find you.'
+                      : 'You are hidden from new nearby discovery.',
+                  value: state.playServicesAvailable && state.isAdvertising,
+                  onChanged:
+                      state.playServicesAvailable &&
+                          state.meshStarted &&
+                          !state.isMeshStarting
+                      ? (value) => ref
+                            .read(chatControllerProvider.notifier)
+                            .setAdvertisingEnabled(value)
+                      : null,
+                ),
               ),
-              _SettingsSwitchRow(
-                icon: Icons.radar_rounded,
-                iconColor: state.isDiscovering ? Colors.orange : cs.outline,
+              HelpTarget(
                 title: 'Scanning',
-                subtitle: state.isDiscovering
-                    ? 'Looking for nearby AirGrid users.'
-                    : 'Not looking for new nearby users.',
-                value: state.playServicesAvailable && state.isDiscovering,
-                onChanged:
-                    state.playServicesAvailable &&
-                        state.meshStarted &&
-                        !state.isMeshStarting
-                    ? (value) => ref
-                          .read(chatControllerProvider.notifier)
-                          .setDiscoveryEnabled(value)
-                    : null,
+                description:
+                    'When enabled, AirGrid actively scans for nearby users. '
+                    'Disable scanning to save battery if you don\'t need to discover '
+                    'new peers right now.',
+                child: _SettingsSwitchRow(
+                  icon: Icons.radar_rounded,
+                  iconColor: state.isDiscovering ? Colors.orange : cs.outline,
+                  title: 'Scanning',
+                  subtitle: state.isDiscovering
+                      ? 'Looking for nearby AirGrid users.'
+                      : 'Not looking for new nearby users.',
+                  value: state.playServicesAvailable && state.isDiscovering,
+                  onChanged:
+                      state.playServicesAvailable &&
+                          state.meshStarted &&
+                          !state.isMeshStarting
+                      ? (value) => ref
+                            .read(chatControllerProvider.notifier)
+                            .setDiscoveryEnabled(value)
+                      : null,
+                ),
               ),
               _SmoothingRow(
                 value: _smoothingAlpha,
@@ -352,16 +426,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           _SettingsSection(
             title: 'Battery & Device Access',
             children: [
-              _SettingsSwitchRow(
-                icon: Icons.battery_saver_outlined,
-                title: 'AirGrid battery saver',
-                subtitle: state.batteryOptimizationEnabled
-                    ? 'On: AirGrid stops scanning and sharing location in the background to save battery. You may miss nearby messages until you reopen the app.'
-                    : 'Off: AirGrid may continue scanning in the background using Bluetooth and Wi-Fi. This can use more battery and may still be limited by Android.',
-                value: state.batteryOptimizationEnabled,
-                onChanged: (value) => ref
-                    .read(chatControllerProvider.notifier)
-                    .setBatteryOptimizationEnabled(value),
+              HelpTarget(
+                title: 'Battery Saver',
+                description:
+                    'When on, AirGrid stops scanning and location sharing in the '
+                    'background to save battery. You may miss messages until you '
+                    'reopen the app. Turn off for continuous background mesh activity.',
+                child: _SettingsSwitchRow(
+                  icon: Icons.battery_saver_outlined,
+                  title: 'AirGrid battery saver',
+                  subtitle: state.batteryOptimizationEnabled
+                      ? 'On: AirGrid stops scanning and sharing location in the background to save battery. You may miss nearby messages until you reopen the app.'
+                      : 'Off: AirGrid may continue scanning in the background using Bluetooth and Wi-Fi. This can use more battery and may still be limited by Android.',
+                  value: state.batteryOptimizationEnabled,
+                  onChanged: (value) => ref
+                      .read(chatControllerProvider.notifier)
+                      .setBatteryOptimizationEnabled(value),
+                ),
               ),
               if (defaultTargetPlatform == TargetPlatform.android)
                 FutureBuilder<MeshPermissionsSnapshot>(
@@ -512,6 +593,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 subtitle: identity.nodeId,
                 monospaceSubtitle: true,
               ),
+              _SettingsRow(
+                icon: Icons.bug_report_outlined,
+                title: 'Report a problem',
+                subtitle:
+                    'Share app, mesh, permission, Play Services, and recent log details',
+                trailing: const Icon(Icons.ios_share_outlined),
+                onTap: _shareDiagnostics,
+              ),
             ],
           ),
           FutureBuilder<PackageInfo>(
@@ -527,11 +616,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               return Padding(
                 padding: const EdgeInsets.only(top: 18),
                 child: Center(
-                  child: Text(
-                    versionLabel,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: cs.outline),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        versionLabel,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: cs.outline),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Latest update: keyboard stability and chat input improvements.',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: cs.outline),
+                      ),
+                    ],
                   ),
                 ),
               );
@@ -547,6 +649,11 @@ String _meshSubtitle(dynamic state) {
   if (state.isMeshStarting) return 'Starting the local mesh.';
   if (!state.playServicesAvailable) {
     return 'Nearby is unavailable on this device.';
+  }
+  if (!state.meshStarted &&
+      ((state.lastEvent ?? '').startsWith('Mesh startup failed:') ||
+          (state.lastEvent ?? '').startsWith('Transport error:'))) {
+    return 'Nearby transport could not start.';
   }
   if (!state.meshStarted) return 'Mesh is off.';
   if (state.peers.isEmpty) return 'Broadcasting and scanning nearby.';

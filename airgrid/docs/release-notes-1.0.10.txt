@@ -1,0 +1,6 @@
+AirGrid 1.0.10
+
+What's new:
+- Improved chat input stability so the keyboard stays open while typing during live chat updates.
+- Reduced layout changes around the message composer when the Android keyboard opens.
+- Continued reliability improvements for nearby offline messaging.
