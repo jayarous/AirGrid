@@ -1,0 +1,6 @@
+AirGrid 1.0.11
+
+What's new:
+- Polished the walkie and settings experience for the latest release.
+- Updated the settings footer to show the current app version and release status more clearly.
+- Continued reliability and UX cleanup for nearby offline messaging.

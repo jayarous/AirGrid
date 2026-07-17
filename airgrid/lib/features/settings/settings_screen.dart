@@ -627,7 +627,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Latest update: walkie recording cleanup, target handling, and invite fixes.',
+                        'Latest update: version 1.0.11 improves walkie UX polish, bottom-screen version visibility, and release readiness.',
                         textAlign: TextAlign.center,
                         style: Theme.of(
                           context,

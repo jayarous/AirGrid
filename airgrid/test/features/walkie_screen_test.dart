@@ -125,7 +125,9 @@ Future<void> _switchToPrivateMode(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('fits compact screens without page scrolling', (tester) async {
+  testWidgets('renders without overflow on a compact portrait screen', (
+    tester,
+  ) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(320, 640);
     addTearDown(() {
@@ -136,22 +138,39 @@ void main() {
     await _pumpWalkie(tester);
 
     expect(tester.takeException(), isNull);
-    expect(
-      find.descendant(
-        of: find.byType(WalkieScreen),
-        matching: find.byWidgetPredicate(
-          (widget) =>
-              widget is SingleChildScrollView &&
-              widget.scrollDirection == Axis.vertical,
-        ),
-      ),
-      findsNothing,
-    );
   });
 
-  testWidgets('shows no-target presence state in private mode', (
-    tester,
-  ) async {
+  testWidgets('renders at full size and scrolls instead of shrinking in '
+      'landscape', (tester) async {
+    // Guards against the FittedBox(scaleDown) regression this replaced:
+    // that layout uniformly shrank the whole screen to fit a short
+    // landscape viewport instead of reflowing/scrolling like Home/Nearby.
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(640, 320);
+    addTearDown(() {
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
+    });
+
+    await _pumpWalkie(tester);
+
+    expect(tester.takeException(), isNull);
+
+    // The PTT button's AnimatedContainer is built with a fixed
+    // 220-logical-pixel width/height. Under the old FittedBox(scaleDown)
+    // layout it would render far smaller on this short viewport; getRect
+    // (unlike getSize) reflects any ancestor transform, so this genuinely
+    // detects a shrink regression.
+    final pttFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is AnimatedContainer && widget.constraints?.maxWidth == 220,
+    );
+    expect(pttFinder, findsOneWidget);
+    final pttRect = tester.getRect(pttFinder);
+    expect(pttRect.height, greaterThan(150));
+  });
+
+  testWidgets('shows no-target presence state in private mode', (tester) async {
     // The screen defaults to Public mode (ChatState.initial() selects the
     // public conversation), so Private mode with no target must be reached
     // via the mode selector rather than assumed as the initial state.
@@ -167,9 +186,7 @@ void main() {
     expect(find.text('CHOOSE SOMEONE'), findsOneWidget);
   });
 
-  testWidgets('public walkie icon toggles public online state', (
-    tester,
-  ) async {
+  testWidgets('public walkie icon toggles public online state', (tester) async {
     await _pumpWalkie(tester);
 
     final container = ProviderScope.containerOf(
@@ -191,9 +208,7 @@ void main() {
     );
 
     await tester.tap(
-      find.byTooltip(
-        'Turn public walkie offline (Long press to open Walkie)',
-      ),
+      find.byTooltip('Turn public walkie offline (Long press to open Walkie)'),
     );
     await tester.pumpAndSettle();
 
@@ -298,10 +313,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Choose person'));
     await tester.pump();
 
-    expect(
-      find.text('No online private peers available yet.'),
-      findsOneWidget,
-    );
+    expect(find.text('No online private peers available yet.'), findsOneWidget);
   });
 
   testWidgets('invite action is shown for an online peer', (tester) async {
