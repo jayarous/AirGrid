@@ -627,7 +627,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Latest update: keyboard stability and chat input improvements.',
+                        'Latest update: walkie recording cleanup, target handling, and invite fixes.',
                         textAlign: TextAlign.center,
                         style: Theme.of(
                           context,
