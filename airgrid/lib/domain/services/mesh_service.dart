@@ -161,6 +161,18 @@ class AirGridMeshService {
   final _statusController =
       StreamController<({String messageId, DeliveryStatus status})>.broadcast();
 
+  /// Emits when a known node id announces a public key different from the one
+  /// previously pinned for it. See [keyChangeStream].
+  final _keyChangeController =
+      StreamController<
+        ({
+          String nodeId,
+          String displayName,
+          String previousPublicKeyBase64,
+          String newPublicKeyBase64,
+        })
+      >.broadcast();
+
   /// Maps transport packet IDs to local UI message IDs for resend flows.
   ///
   /// When a resend uses a fresh packet id, receipts come back for that packet
@@ -341,6 +353,24 @@ class AirGridMeshService {
 
   /// Current peer list snapshot.
   List<MeshPeer> get peers => List.unmodifiable(_peers.values);
+
+  /// Stream of public-key changes for already-known node IDs.
+  ///
+  /// A node ID is not cryptographically bound to its key, so this is the only
+  /// signal that the peer behind a familiar name may not be the same device.
+  /// Benign cause: the peer reinstalled and generated a fresh identity key.
+  /// Malicious cause: someone is announcing that node ID with their own key.
+  /// The mesh cannot distinguish them; only out-of-band fingerprint
+  /// comparison can. See [CryptoService.fingerprint].
+  Stream<
+    ({
+      String nodeId,
+      String displayName,
+      String previousPublicKeyBase64,
+      String newPublicKeyBase64,
+    })
+  >
+  get keyChangeStream => _keyChangeController.stream;
 
   /// Stream of all known contacts; emits whenever the set changes.
   Stream<List<KnownContact>> get knownContactsStream =>
@@ -1591,6 +1621,7 @@ class AirGridMeshService {
     await _peerController.close();
     await _locationController.close();
     await _statusController.close();
+    await _keyChangeController.close();
     await _contactStore.dispose();
   }
 
@@ -2655,6 +2686,33 @@ class AirGridMeshService {
 
     if (!isDuplicate) {
       _keyAnnounceCache.add(cacheKey);
+    }
+
+    // Trust-on-first-use: if we have seen a different key for this node id
+    // before, say so. A node id is not cryptographically bound to its key, so
+    // a changed key is exactly what both a reinstall and an impersonation
+    // attempt look like from here. We cannot tell them apart, so we accept
+    // the new key (blocking would break every legitimate reinstall) and
+    // surface the change for the user to judge.
+    final previous = _contactStore.contacts.cast<KnownContact?>().firstWhere(
+      (c) => c?.nodeId == packet.senderNodeId,
+      orElse: () => null,
+    );
+    final previousKey = previous?.publicKeyBase64;
+    if (previousKey != null &&
+        previousKey.isNotEmpty &&
+        previousKey != publicKeyB64) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Key change for ${packet.senderNodeId}: previously pinned key no '
+        'longer matches. Accepting new key; flagging for user verification.',
+      );
+      _keyChangeController.add((
+        nodeId: packet.senderNodeId,
+        displayName: packet.senderName,
+        previousPublicKeyBase64: previousKey,
+        newPublicKeyBase64: publicKeyB64,
+      ));
     }
 
     // Cache the public key for future opportunistic encryption.

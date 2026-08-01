@@ -224,6 +224,41 @@ This protects private message contents from casual relay observers, but it is
 not a full authenticated identity system. Stronger long-term identity
 verification is future work.
 
+### Key Fingerprints And Key-Change Detection
+
+A node ID is **not** cryptographically bound to its public key. Any peer can
+announce any node ID with its own key, so a familiar name in the peer list is
+not proof of who is behind it.
+
+Two mitigations exist today:
+
+- `CryptoService.fingerprint` renders a 64-bit SHA-256 fingerprint of a public
+  key as four groups of four hex characters. Two users comparing that string
+  out-of-band is the only way to confirm a key really belongs to the person
+  they think it does — the mesh learns keys over the mesh and cannot vouch for
+  them.
+- `AirGridMeshService.keyChangeStream` emits whenever a known node ID announces
+  a key different from the one previously pinned for it.
+
+A key change is **accepted, not blocked**. A reinstall generates a fresh
+identity key, so blocking would break a common, legitimate case; the service
+cannot tell a reinstall from an impersonation attempt, so it defers to the
+user. Surfacing these events in the UI is still to do.
+
+### Known Gap: Cleartext Metadata On Private Packets
+
+`senderName` and `recipientNodeId` travel in cleartext on encrypted private
+packets. Encrypted private packets are also broadcast to *every* connected
+endpoint for crowd relay, so this exposes who is talking to whom to every peer
+in radio range, not merely to relays along a path.
+
+Omitting `senderName` on private packets is **not** a drop-in change:
+`DisplayNameValidator.validateRemote` rejects an empty name, so any node
+running a released build would drop such packets at the validation gate and
+private messaging would silently break across versions. Fixing this needs a
+staged rollout — first ship receivers that tolerate an absent name, then, once
+those are widely deployed, ship senders that omit it.
+
 Do not log private keys, shared secrets, or plaintext private message contents.
 
 ## Routing Rules
