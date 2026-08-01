@@ -81,20 +81,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         return StatefulBuilder(
           builder: (ctx, setState) => AlertDialog(
             title: const Text('Nearby Visibility'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: PrivacyMode.values.map((mode) {
-                return RadioListTile<PrivacyMode>(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(mode.label),
-                  subtitle: Text(mode.description),
-                  value: mode,
-                  groupValue: selected,
-                  onChanged: (m) {
-                    if (m != null) setState(() => selected = m);
-                  },
-                );
-              }).toList(),
+            content: RadioGroup<PrivacyMode>(
+              groupValue: selected,
+              onChanged: (m) {
+                if (m != null) setState(() => selected = m);
+              },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: PrivacyMode.values.map((mode) {
+                  return RadioListTile<PrivacyMode>(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(mode.label),
+                    subtitle: Text(mode.description),
+                    value: mode,
+                  );
+                }).toList(),
+              ),
             ),
             actions: [
               TextButton(

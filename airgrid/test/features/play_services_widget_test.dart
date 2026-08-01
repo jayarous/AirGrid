@@ -11,6 +11,7 @@ import 'package:airgrid/data/storage/privacy_settings_store.dart';
 import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
+import 'package:airgrid/domain/models/privacy_mode.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/chat_screen.dart';
 import 'package:airgrid/features/home/home_screen.dart';
@@ -434,4 +435,47 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  // Guards the RadioGroup migration: RadioListTile's groupValue/onChanged were
+  // deprecated, so selection now propagates through a RadioGroup ancestor
+  // rather than each tile. If that wiring breaks, tapping an option silently
+  // stops changing anything — which analyze cannot catch.
+  testWidgets('Nearby Visibility dialog applies the selected privacy mode', (
+    tester,
+  ) async {
+    await _pumpWithProviders(
+      tester,
+      const SettingsScreen(),
+      const PlayServicesStatus.available(),
+    );
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(SettingsScreen)),
+    );
+    expect(
+      container.read(chatControllerProvider).privacyMode,
+      PrivacyMode.everyoneNearby,
+    );
+
+    await tester.scrollUntilVisible(
+      find.text('Nearby Visibility'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Nearby Visibility'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text(PrivacyMode.trustedContactsOnly.label));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(chatControllerProvider).privacyMode,
+      PrivacyMode.trustedContactsOnly,
+      reason: 'selection must propagate through the RadioGroup ancestor',
+    );
+  });
 }
