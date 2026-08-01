@@ -273,6 +273,21 @@ Important mesh invariants:
 - Relay jitter is decided by `RelayController`.
 - Fragment chunks are deduplicated separately from assembled packets.
 
+Relay eligibility follows two rules, pinned by `relay_eligibility_test.dart`:
+
+- Public traffic relays — `chat`, `image`, `audio`, `key_announce`,
+  `location_update`.
+- Private traffic relays **only** when encrypted, because a relay must never
+  be able to read what it forwards. Plaintext private packets are dropped.
+
+Public walkie audio (`packetType: 'audio'`) relays mesh-wide, matching public
+text and images. Clips are bounded by `kWalkieMaxBytes` (96 KiB), and that
+bound is currently the only real brake: an 8-hop flood of a 96 KiB clip is far
+more traffic than a text packet, and the inbound rate limiter counts *packets*,
+not bytes, so it does not throttle media proportionally. Byte-aware rate
+limiting is the natural follow-up if public walkie sees heavy use in a crowded
+mesh.
+
 Private routing:
 
 - Direct private messages are sent only to the target endpoint.

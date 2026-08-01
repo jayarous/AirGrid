@@ -71,6 +71,13 @@ class AirGridPacket {
           encryptionVersion != null) ||
       (packetType == 'chat' && conversationType == 'public') ||
       (packetType == 'image' && conversationType == 'public') ||
+      // Public walkie audio relays like any other public traffic. Clips are
+      // bounded by kWalkieMaxBytes (96 KiB), which is the main brake on what
+      // this costs the mesh: an 8-hop flood of a clip that size is
+      // substantially more traffic than a text packet. The inbound limiter
+      // counts packets rather than bytes, so it does not throttle this
+      // proportionally — see the note in README under Routing Rules.
+      (packetType == 'audio' && conversationType == 'public') ||
       (conversationType == 'private' && encryptionVersion != null);
 
   const AirGridPacket({
