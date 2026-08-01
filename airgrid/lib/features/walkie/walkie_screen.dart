@@ -119,7 +119,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     if (selected is PrivateConversation) {
       return selected.peerNodeId;
     }
-    return state.walkiePeerNodeId;
+    return state.walkie.peerNodeId;
   }
 
   Future<void> _handleIncomingWalkieUpdates(
@@ -130,7 +130,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
     final state = ref.read(chatControllerProvider);
     final selected = state.selectedConversation;
-    if (state.publicWalkieStayOnline ||
+    if (state.walkie.publicStayOnline ||
         (selected is PrivateConversation &&
             state.knownContacts.any(
               (contact) =>
@@ -165,7 +165,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       // Drop incoming audio if no active session with this peer.
       final activeSessionNodeId = ref
           .read(chatControllerProvider)
-          .walkieSessionActivePeerNodeId;
+          .walkie
+          .sessionActivePeerNodeId;
       if (activeSessionNodeId != targetNodeId) return;
 
       for (final message in next) {
@@ -290,8 +291,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     if (contact == null || !contact.isTrusted || !contact.walkieAlwaysOn) {
       return;
     }
-    if (state.walkieInvitePeerNodeId == target.peerNodeId ||
-        state.walkieSessionActivePeerNodeId == target.peerNodeId) {
+    if (state.walkie.invitePeerNodeId == target.peerNodeId ||
+        state.walkie.sessionActivePeerNodeId == target.peerNodeId) {
       return;
     }
 
@@ -388,7 +389,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
   Future<void> _startHoldRecording() async {
     final current = ref.read(chatControllerProvider);
-    if (current.walkieIsTransmitting || current.walkieIsSending) return;
+    if (current.walkie.isTransmitting || current.walkie.isSending) return;
 
     String? peerNodeIdForSession;
     if (!_isPublicMode) {
@@ -405,7 +406,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         return;
       }
 
-      if (current.walkieSessionActivePeerNodeId != target.peerNodeId) {
+      if (current.walkie.sessionActivePeerNodeId != target.peerNodeId) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -425,8 +426,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         orElse: () => null,
       );
       if (contact != null && contact.isTrusted && contact.walkieAlwaysOn) {
-        if (current.walkieInvitePeerNodeId != target.peerNodeId &&
-            current.walkieSessionActivePeerNodeId != target.peerNodeId) {
+        if (current.walkie.invitePeerNodeId != target.peerNodeId &&
+            current.walkie.sessionActivePeerNodeId != target.peerNodeId) {
           final peer = _peerByNodeId(target.peerNodeId);
           if (peer != null) {
             unawaited(_invitePeer(peer));
@@ -499,7 +500,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       _status = 'Transmitting... release to send';
     });
     _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      if (!mounted || !ref.read(chatControllerProvider).walkieIsTransmitting) {
+      if (!mounted || !ref.read(chatControllerProvider).walkie.isTransmitting) {
         return;
       }
       setState(() {
@@ -509,7 +510,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   }
 
   Future<void> _cancelHoldRecording() async {
-    if (!ref.read(chatControllerProvider).walkieIsTransmitting) return;
+    if (!ref.read(chatControllerProvider).walkie.isTransmitting) return;
     _ticker?.cancel();
     _ticker = null;
     _holdStopwatch
@@ -546,7 +547,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
   Future<void> _stopHoldAndSend() async {
     final current = ref.read(chatControllerProvider);
-    if (!current.walkieIsTransmitting || current.walkieIsSending) return;
+    if (!current.walkie.isTransmitting || current.walkie.isSending) return;
 
     _ticker?.cancel();
     _ticker = null;
@@ -1431,7 +1432,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   @override
   Widget build(BuildContext context) {
     ref.listen<String?>(
-      chatControllerProvider.select((state) => state.walkieLastError),
+      chatControllerProvider.select((state) => state.walkie.lastError),
       (previous, next) {
         if (!mounted || next == null || next.isEmpty || next == previous) {
           return;
@@ -1454,28 +1455,28 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
 
     final state = ref.watch(chatControllerProvider);
-    final isHolding = state.walkieIsTransmitting;
-    final isSending = state.walkieIsSending;
+    final isHolding = state.walkie.isTransmitting;
+    final isSending = state.walkie.isSending;
     final selected = state.selectedConversation;
     final targetNodeId = selected is PrivateConversation
         ? selected.peerNodeId
-        : state.walkiePeerNodeId;
+        : state.walkie.peerNodeId;
     final hasTarget = targetNodeId != null && targetNodeId.isNotEmpty;
     final isTargetOnline =
         hasTarget && state.peers.any((p) => p.nodeId == targetNodeId);
     final targetName = selected is PrivateConversation
         ? selected.peerName
         : 'No private target selected';
-    final invitePeer = _peerByNodeId(state.walkieInvitePeerNodeId);
-    final isIncomingInvite = state.walkieInviteIsIncoming;
+    final invitePeer = _peerByNodeId(state.walkie.invitePeerNodeId);
+    final isIncomingInvite = state.walkie.inviteIsIncoming;
     final isActiveSessionForTarget = _isPublicMode
         ? state.meshStarted
-        : hasTarget && state.walkieSessionActivePeerNodeId == targetNodeId;
+        : hasTarget && state.walkie.sessionActivePeerNodeId == targetNodeId;
     final isOutgoingInviteForTarget =
         !_isPublicMode &&
         !isIncomingInvite &&
         hasTarget &&
-        state.walkieInvitePeerNodeId == targetNodeId &&
+        state.walkie.invitePeerNodeId == targetNodeId &&
         !isActiveSessionForTarget;
     final pingEnabled = !(isHolding || isSending) && !_isPublicMode;
     final pingDotColor = _isPublicMode
@@ -1499,7 +1500,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         selectedPrivateContact != null &&
         selectedPrivateContact.isTrusted;
     final stayOnlineOn = _isPublicMode
-        ? state.publicWalkieStayOnline
+        ? state.walkie.publicStayOnline
         : (selectedPrivateContact?.walkieAlwaysOn ?? false);
     final stayOnlineEnabled =
         !(isHolding || isSending) &&
@@ -1515,7 +1516,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         .where((contact) => contact.isTrusted && contact.walkieAlwaysOn)
         .length;
     final alwaysOnlineChannelParts = <String>[];
-    if (state.publicWalkieStayOnline) {
+    if (state.walkie.publicStayOnline) {
       alwaysOnlineChannelParts.add('CH-07 PUBLIC');
     }
     if (privateAlwaysOnCount > 0) {

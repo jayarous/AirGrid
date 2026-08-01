@@ -104,19 +104,19 @@ void main() {
     controller.setWalkieLastError('mesh offline');
 
     var state = container.read(chatControllerProvider);
-    expect(state.walkiePeerNodeId, 'peer-1');
-    expect(state.walkieIsTransmitting, isTrue);
-    expect(state.walkieIsSending, isTrue);
-    expect(state.walkieLastError, 'mesh offline');
+    expect(state.walkie.peerNodeId, 'peer-1');
+    expect(state.walkie.isTransmitting, isTrue);
+    expect(state.walkie.isSending, isTrue);
+    expect(state.walkie.lastError, 'mesh offline');
 
     controller.setWalkieTransmitting(isTransmitting: false);
     controller.setWalkieSending(isSending: false);
     controller.setWalkieLastError(null);
 
     state = container.read(chatControllerProvider);
-    expect(state.walkieIsTransmitting, isFalse);
-    expect(state.walkieIsSending, isFalse);
-    expect(state.walkieLastError, isNull);
+    expect(state.walkie.isTransmitting, isFalse);
+    expect(state.walkie.isSending, isFalse);
+    expect(state.walkie.lastError, isNull);
   });
 
   test(
@@ -132,12 +132,12 @@ void main() {
       );
 
       var state = container.read(chatControllerProvider);
-      expect(state.walkiePeerNodeId, 'peer-42');
+      expect(state.walkie.peerNodeId, 'peer-42');
 
       controller.selectConversation(const PublicConversation());
 
       state = container.read(chatControllerProvider);
-      expect(state.walkiePeerNodeId, isNull);
+      expect(state.walkie.peerNodeId, isNull);
     },
   );
 
@@ -163,9 +163,9 @@ void main() {
     await controller.stopMesh();
 
     final state = container.read(chatControllerProvider);
-    expect(state.walkieIsTransmitting, isFalse);
-    expect(state.walkieIsSending, isFalse);
-    expect(state.walkieLastError, isNull);
+    expect(state.walkie.isTransmitting, isFalse);
+    expect(state.walkie.isSending, isFalse);
+    expect(state.walkie.lastError, isNull);
     expect(transport.stopCount, 1);
     expect(foreground.stopCount, 1);
   });
@@ -193,9 +193,9 @@ void main() {
 
     expect(ok, isTrue);
     final state = container.read(chatControllerProvider);
-    expect(state.walkieInviteSessionId, isNotNull);
-    expect(state.walkieInvitePeerNodeId, 'peer-1');
-    expect(state.walkieInviteIsIncoming, isFalse);
+    expect(state.walkie.inviteSessionId, isNotNull);
+    expect(state.walkie.invitePeerNodeId, 'peer-1');
+    expect(state.walkie.inviteIsIncoming, isFalse);
     expect(transport.sentPayloads, isNotEmpty);
   });
 }

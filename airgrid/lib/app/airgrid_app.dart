@@ -35,11 +35,11 @@ class _AirGridAppState extends ConsumerState<AirGridApp> {
     final state = ref.read(chatControllerProvider);
     final navigator = _navigatorKey.currentState;
     final navigatorContext = _navigatorKey.currentContext;
-    final peer = _peerByNodeId(state.walkieInvitePeerNodeId);
-    final sessionId = state.walkieInviteSessionId;
+    final peer = _peerByNodeId(state.walkie.invitePeerNodeId);
+    final sessionId = state.walkie.inviteSessionId;
     if (peer == null ||
         sessionId == null ||
-        !state.walkieInviteIsIncoming ||
+        !state.walkie.inviteIsIncoming ||
         navigator == null ||
         navigatorContext == null) {
       return;
@@ -82,11 +82,11 @@ class _AirGridAppState extends ConsumerState<AirGridApp> {
   @override
   Widget build(BuildContext context) {
     ref.listen<String?>(
-      chatControllerProvider.select((state) => state.walkieInviteSessionId),
+      chatControllerProvider.select((state) => state.walkie.inviteSessionId),
       (previous, next) {
         if (!mounted || _inviteDialogOpen) return;
         final state = ref.read(chatControllerProvider);
-        if (!state.walkieInviteIsIncoming || next == null) return;
+        if (!state.walkie.inviteIsIncoming || next == null) return;
         if (_lastPromptedInviteSessionId == next) return;
         _lastPromptedInviteSessionId = next;
         WidgetsBinding.instance.addPostFrameCallback((_) {
