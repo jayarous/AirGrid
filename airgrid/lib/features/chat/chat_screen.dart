@@ -212,141 +212,144 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final controller = ref.read(chatControllerProvider.notifier);
     controller.beginForegroundCriticalAction();
     try {
-    final chatState = ref.read(chatControllerProvider);
-    if (chatState.selectedConversation is! PrivateConversation) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Photo sharing is available only in private chats'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-
-    var permission = await Permission.photos.request();
-    if (!permission.isGranted && Platform.isAndroid) {
-      permission = await Permission.storage.request();
-    }
-    if (!permission.isGranted) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Photo permission denied'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-
-    final picked = await _imagePicker.pickImage(source: ImageSource.gallery);
-    if (picked == null) return;
-
-    Uint8List bytes;
-    try {
-      bytes = await picked.readAsBytes();
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Failed to read image'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-
-    final compressed = await FlutterImageCompress.compressWithList(
-      bytes,
-      quality: 72,
-      minWidth: 1280,
-      minHeight: 1280,
-    );
-
-    if (compressed.isEmpty ||
-        compressed.length > AirGridConstants.kPrivatePhotoMaxBytes) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Photo is too large after compression. Maximum is '
-            '${_formatBytes(AirGridConstants.kPrivatePhotoMaxBytes)}.',
+      final chatState = ref.read(chatControllerProvider);
+      if (chatState.selectedConversation is! PrivateConversation) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Photo sharing is available only in private chats'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
           ),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
+        );
+        return;
+      }
 
-    int? width;
-    int? height;
-    try {
-      final codec = await ui.instantiateImageCodec(
-        Uint8List.fromList(compressed),
-      );
-      final frame = await codec.getNextFrame();
-      width = frame.image.width;
-      height = frame.image.height;
-    } catch (_) {
-      // Best effort dimensions.
-    }
+      var permission = await Permission.photos.request();
+      if (!permission.isGranted && Platform.isAndroid) {
+        permission = await Permission.storage.request();
+      }
+      if (!permission.isGranted) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Photo permission denied'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
 
-    final transferId = const Uuid().v4();
-    String localPath;
-    try {
-      localPath = await _mediaCache.writeImageBytes(
-        transferId,
-        Uint8List.fromList(compressed),
-      );
-    } catch (_) {
-      // Keep picker file path fallback so the sender still has a preview.
-      localPath = picked.path;
-    }
-    final payload = ImageAttachmentPayload(
-      transferId: transferId,
-      mimeType: 'image/jpeg',
-      byteLength: compressed.length,
-      width: width,
-      height: height,
-      dataBase64: base64Encode(compressed),
-      localTempPath: localPath,
-    );
+      final picked = await _imagePicker.pickImage(source: ImageSource.gallery);
+      if (picked == null) return;
 
-    if (!await controller.waitForMeshReady()) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Mesh is still reconnecting. Please try again.'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
+      Uint8List bytes;
+      try {
+        bytes = await picked.readAsBytes();
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to read image'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
 
-    if (!await controller.waitForPeerOnline(
-      ref.read(chatControllerProvider).selectedConversation is PrivateConversation
-          ? (ref.read(chatControllerProvider).selectedConversation
-              as PrivateConversation)
-              .peerNodeId
-          : '',
-    )) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Recipient is still coming online. Please try again.'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
+      final compressed = await FlutterImageCompress.compressWithList(
+        bytes,
+        quality: 72,
+        minWidth: 1280,
+        minHeight: 1280,
       );
-      return;
-    }
 
-    await _sendImagePayload(payload);
+      if (compressed.isEmpty ||
+          compressed.length > AirGridConstants.kPrivatePhotoMaxBytes) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Photo is too large after compression. Maximum is '
+              '${_formatBytes(AirGridConstants.kPrivatePhotoMaxBytes)}.',
+            ),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      int? width;
+      int? height;
+      try {
+        final codec = await ui.instantiateImageCodec(
+          Uint8List.fromList(compressed),
+        );
+        final frame = await codec.getNextFrame();
+        width = frame.image.width;
+        height = frame.image.height;
+      } catch (_) {
+        // Best effort dimensions.
+      }
+
+      final transferId = const Uuid().v4();
+      String localPath;
+      try {
+        localPath = await _mediaCache.writeImageBytes(
+          transferId,
+          Uint8List.fromList(compressed),
+        );
+      } catch (_) {
+        // Keep picker file path fallback so the sender still has a preview.
+        localPath = picked.path;
+      }
+      final payload = ImageAttachmentPayload(
+        transferId: transferId,
+        mimeType: 'image/jpeg',
+        byteLength: compressed.length,
+        width: width,
+        height: height,
+        dataBase64: base64Encode(compressed),
+        localTempPath: localPath,
+      );
+
+      if (!await controller.waitForMeshReady()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Mesh is still reconnecting. Please try again.'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      if (!await controller.waitForPeerOnline(
+        ref.read(chatControllerProvider).selectedConversation
+                is PrivateConversation
+            ? (ref.read(chatControllerProvider).selectedConversation
+                      as PrivateConversation)
+                  .peerNodeId
+            : '',
+      )) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Recipient is still coming online. Please try again.',
+            ),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      await _sendImagePayload(payload);
     } finally {
       controller.endForegroundCriticalAction();
     }
@@ -449,11 +452,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         return;
       }
 
-      if (!await controller.waitForPeerOnline(selectedConversation.peerNodeId)) {
+      if (!await controller.waitForPeerOnline(
+        selectedConversation.peerNodeId,
+      )) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Recipient is still coming online. Please try again.'),
+            content: Text(
+              'Recipient is still coming online. Please try again.',
+            ),
             duration: Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
@@ -600,11 +607,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         if (!mounted || !confirmed) return;
         result = await ref
             .read(chatControllerProvider.notifier)
-            .sendPrivateImage(
-              peer,
-              payload,
-              allowPlaintextFallback: true,
-            );
+            .sendPrivateImage(peer, payload, allowPlaintextFallback: true);
       }
     } else {
       final contact = chatState.knownContacts.cast<KnownContact?>().firstWhere(
@@ -695,15 +698,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     }
 
     final tempDir = await getTemporaryDirectory();
-    final filePath =
-        '${tempDir.path}\\airgrid_voice_${const Uuid().v4()}.m4a';
+    final filePath = '${tempDir.path}\\airgrid_voice_${const Uuid().v4()}.m4a';
 
     try {
       await _audioRecorder.start(
-        const RecordConfig(
-          bitRate: 24000,
-          sampleRate: 16000,
-        ),
+        const RecordConfig(bitRate: 24000, sampleRate: 16000),
         path: filePath,
       );
     } catch (_) {
@@ -925,11 +924,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         return;
       }
 
-      if (!await controller.waitForPeerOnline(selectedConversation.peerNodeId)) {
+      if (!await controller.waitForPeerOnline(
+        selectedConversation.peerNodeId,
+      )) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Recipient is still coming online. Please try again.'),
+            content: Text(
+              'Recipient is still coming online. Please try again.',
+            ),
             duration: Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
@@ -1009,11 +1012,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         if (!mounted || !confirmed) return;
         result = await ref
             .read(chatControllerProvider.notifier)
-            .sendPrivateAudio(
-              peer,
-              payload,
-              allowPlaintextFallback: true,
-            );
+            .sendPrivateAudio(peer, payload, allowPlaintextFallback: true);
       }
     } else {
       final contact = chatState.knownContacts.cast<KnownContact?>().firstWhere(
@@ -1302,11 +1301,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 final conv = chatState.selectedConversation;
                 if (conv is! PrivateConversation || !mounted) return;
 
-                final contact = chatState.knownContacts.cast<KnownContact?>().firstWhere(
-                  (c) => c?.nodeId == conv.peerNodeId,
-                  orElse: () => null,
+                final contact = chatState.knownContacts
+                    .cast<KnownContact?>()
+                    .firstWhere(
+                      (c) => c?.nodeId == conv.peerNodeId,
+                      orElse: () => null,
+                    );
+                final isOnline = chatState.peers.any(
+                  (p) => p.nodeId == conv.peerNodeId,
                 );
-                final isOnline = chatState.peers.any((p) => p.nodeId == conv.peerNodeId);
                 await showPeerProfileSheet(
                   context,
                   PeerProfileSnapshot(
@@ -1426,7 +1429,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
           return Column(
             children: [
-              if ((_permissionsSnapshot?.hasMissingCriticalPermissions ?? false) &&
+              if ((_permissionsSnapshot?.hasMissingCriticalPermissions ??
+                      false) &&
                   !_dismissPermissionBanner)
                 MaterialBanner(
                   backgroundColor: Theme.of(context).colorScheme.errorContainer,
@@ -1436,7 +1440,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   actions: [
                     TextButton(
                       onPressed: () async {
-                        await Navigator.of(context).pushNamed(AppRouter.settings);
+                        await Navigator.of(
+                          context,
+                        ).pushNamed(AppRouter.settings);
                         if (!mounted) return;
                         await _refreshPermissionStatus();
                       },
@@ -1461,7 +1467,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         ),
                       )
                     : const MeshStatusPanel(),
-              Expanded(child: _MessageList(scrollController: _scrollController)),
+              Expanded(
+                child: _MessageList(scrollController: _scrollController),
+              ),
               if (!compactHeight) const _ConversationPicker(),
               _InputBar(
                 controller: _inputController,
@@ -1517,12 +1525,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   _AttachmentMenuTile(
                     icon: Icons.mic_rounded,
                     color: cs.error,
-                    onTap: () => Navigator.pop(context, _AttachmentChoice.voice),
+                    onTap: () =>
+                        Navigator.pop(context, _AttachmentChoice.voice),
                   ),
                   _AttachmentMenuTile(
                     icon: Icons.photo_library_outlined,
                     color: cs.primary,
-                    onTap: () => Navigator.pop(context, _AttachmentChoice.photo),
+                    onTap: () =>
+                        Navigator.pop(context, _AttachmentChoice.photo),
                   ),
                   _AttachmentMenuTile(
                     icon: Icons.attach_file_rounded,
@@ -2043,24 +2053,24 @@ class _ConversationChipLabel extends StatelessWidget {
           ),
         ],
         if (unreadCount > 0) ...[
-        const SizedBox(width: 6),
-        Container(
-          constraints: const BoxConstraints(minWidth: 18),
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-          decoration: BoxDecoration(
-            color: cs.error,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Text(
-            unreadCount > 99 ? '99+' : '$unreadCount',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: cs.onError,
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
+          const SizedBox(width: 6),
+          Container(
+            constraints: const BoxConstraints(minWidth: 18),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+            decoration: BoxDecoration(
+              color: cs.error,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              unreadCount > 99 ? '99+' : '$unreadCount',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: cs.onError,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
-        ),
         ],
       ],
     );
@@ -2216,8 +2226,8 @@ class _InputBar extends StatelessWidget {
                             decoration: InputDecoration(
                               hintText: isRecordingVoice
                                   ? isVoiceRecordingPaused
-                                  ? 'Recording paused… tap play to continue'
-                                      : 'Recording in progress…'
+                                        ? 'Recording paused… tap play to continue'
+                                        : 'Recording in progress…'
                                   : 'Type a message…',
                               border: InputBorder.none,
                               focusedBorder: InputBorder.none,
@@ -2241,7 +2251,8 @@ class _InputBar extends StatelessWidget {
                     final hasText =
                         !isRecordingVoice && value.text.trim().isNotEmpty;
                     final hasVoiceDraft = isRecordingVoice;
-                    final active = hasText || hasVoiceDraft || !isRecordingVoice;
+                    final active =
+                        hasText || hasVoiceDraft || !isRecordingVoice;
                     return AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
                       decoration: BoxDecoration(
@@ -2256,8 +2267,8 @@ class _InputBar extends StatelessWidget {
                             : onOpenAttachmentMenu,
                         icon: Icon(
                           hasVoiceDraft || hasText
-                            ? Icons.send_rounded
-                            : Icons.attach_file_rounded,
+                              ? Icons.send_rounded
+                              : Icons.attach_file_rounded,
                           color: active
                               ? cs.onPrimary
                               : cs.onSurfaceVariant.withAlpha(100),
@@ -2286,27 +2297,27 @@ String _formatVoiceDuration(Duration duration) {
   return '$minutes:$seconds';
 }
 
-  String _formatBytes(int byteLength) {
-    const kb = 1024;
-    const mb = kb * 1024;
-    if (byteLength >= mb) {
-      return '${(byteLength / mb).toStringAsFixed(1)} MB';
-    }
-    if (byteLength >= kb) {
-      return '${(byteLength / kb).toStringAsFixed(1)} KB';
-    }
-    return '$byteLength B';
+String _formatBytes(int byteLength) {
+  const kb = 1024;
+  const mb = kb * 1024;
+  if (byteLength >= mb) {
+    return '${(byteLength / mb).toStringAsFixed(1)} MB';
   }
+  if (byteLength >= kb) {
+    return '${(byteLength / kb).toStringAsFixed(1)} KB';
+  }
+  return '$byteLength B';
+}
 
-  String _formatDuration(Duration duration) {
-    if (duration.inHours > 0) {
-      return '${duration.inHours}h ${duration.inMinutes.remainder(60)}m';
-    }
-    if (duration.inMinutes > 0) {
-      return '${duration.inMinutes}m ${duration.inSeconds.remainder(60)}s';
-    }
-    return '${duration.inSeconds}s';
+String _formatDuration(Duration duration) {
+  if (duration.inHours > 0) {
+    return '${duration.inHours}h ${duration.inMinutes.remainder(60)}m';
   }
+  if (duration.inMinutes > 0) {
+    return '${duration.inMinutes}m ${duration.inSeconds.remainder(60)}s';
+  }
+  return '${duration.inSeconds}s';
+}
 
 class _ConnectingBanner extends StatelessWidget {
   const _ConnectingBanner();

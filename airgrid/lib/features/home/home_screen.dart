@@ -170,7 +170,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void> _toggleHomeAdvertising() async {
     final state = ref.read(chatControllerProvider);
     final controlsEnabled =
-        state.playServicesAvailable && state.meshStarted && !state.isMeshStarting;
+        state.playServicesAvailable &&
+        state.meshStarted &&
+        !state.isMeshStarting;
     if (!controlsEnabled) return;
 
     final next = !state.isAdvertising;
@@ -189,7 +191,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void> _toggleHomeDiscovering() async {
     final state = ref.read(chatControllerProvider);
     final controlsEnabled =
-        state.playServicesAvailable && state.meshStarted && !state.isMeshStarting;
+        state.playServicesAvailable &&
+        state.meshStarted &&
+        !state.isMeshStarting;
     if (!controlsEnabled) return;
 
     final next = !state.isDiscovering;
@@ -208,7 +212,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void> _refreshHome() async {
     await _refreshPermissionStatus();
     if (!mounted) return;
-    await ref.read(chatControllerProvider.notifier).startMesh(forceRestart: true);
+    await ref
+        .read(chatControllerProvider.notifier)
+        .startMesh(forceRestart: true);
   }
 
   Future<void> _refreshPeersFromChip() async {
@@ -280,23 +286,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-              displayName == null || displayName.isEmpty
-                  ? 'Hello'
-                  : 'Hello, $displayName',
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800, letterSpacing: -0.5),
-            ),
-            if (profileStatus != null && profileStatus.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                profileStatus,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: cs.onSurfaceVariant,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+                        displayName == null || displayName.isEmpty
+                            ? 'Hello'
+                            : 'Hello, $displayName',
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.5,
+                            ),
+                      ),
+                      if (profileStatus != null &&
+                          profileStatus.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          profileStatus,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: cs.onSurfaceVariant,
+                                fontWeight: FontWeight.w500,
+                              ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -377,42 +387,40 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     : state.playServicesMessage,
               )
             else
-              ...state.peers.map(
-                (peer) {
-                  final contact = peer.nodeId == null
-                      ? null
-                      : state.knownContacts.cast<KnownContact?>().firstWhere(
-                          (c) => c?.nodeId == peer.nodeId,
-                          orElse: () => null,
-                        );
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: _PeerTile(
-                      peer: peer,
-                      unreadCount: peer.nodeId == null
-                          ? 0
-                          : state.unreadCountFor(peer.nodeId!),
-                      onTap: peer.nodeId == null
-                          ? null
-                          : () => _openPrivateChat(peer),
-                      onLongPress: peer.nodeId == null
-                          ? null
-                          : () {
-                              showPeerProfileSheet(
-                                context,
-                                PeerProfileSnapshot(
-                                  displayName: peer.displayName,
-                                  nodeId: peer.nodeId!,
-                                  profileIconId: contact?.profileIconId,
-                                  profileStatus: contact?.profileStatus,
-                                  isOnline: true,
-                                ),
-                              );
-                            },
-                    ),
-                  );
-                },
-              ),
+              ...state.peers.map((peer) {
+                final contact = peer.nodeId == null
+                    ? null
+                    : state.knownContacts.cast<KnownContact?>().firstWhere(
+                        (c) => c?.nodeId == peer.nodeId,
+                        orElse: () => null,
+                      );
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _PeerTile(
+                    peer: peer,
+                    unreadCount: peer.nodeId == null
+                        ? 0
+                        : state.unreadCountFor(peer.nodeId!),
+                    onTap: peer.nodeId == null
+                        ? null
+                        : () => _openPrivateChat(peer),
+                    onLongPress: peer.nodeId == null
+                        ? null
+                        : () {
+                            showPeerProfileSheet(
+                              context,
+                              PeerProfileSnapshot(
+                                displayName: peer.displayName,
+                                nodeId: peer.nodeId!,
+                                profileIconId: contact?.profileIconId,
+                                profileStatus: contact?.profileStatus,
+                                isOnline: true,
+                              ),
+                            );
+                          },
+                  ),
+                );
+              }),
             const SizedBox(height: 12),
             _SectionHeader(
               title: 'Recent Activity',
@@ -442,12 +450,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         hoverElevation: 6,
         focusElevation: 6,
         highlightElevation: 8,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         onPressed: _openPublicChat,
         icon: const Icon(Icons.forum_rounded),
-        label: const Text('Public Chat', style: TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.2)),
+        label: const Text(
+          'Public Chat',
+          style: TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.2),
+        ),
       ),
     );
   }
@@ -635,11 +644,19 @@ class _QuickActions extends StatelessWidget {
     required this.onOpenWalkie,
   });
 
-  Widget _buildActionCard(BuildContext context, String title, IconData icon, VoidCallback onTap, {bool isPrimary = false}) {
+  Widget _buildActionCard(
+    BuildContext context,
+    String title,
+    IconData icon,
+    VoidCallback onTap, {
+    bool isPrimary = false,
+  }) {
     final cs = Theme.of(context).colorScheme;
     return Expanded(
       child: Material(
-        color: isPrimary ? cs.primary : cs.surfaceContainerHighest.withAlpha(150),
+        color: isPrimary
+            ? cs.primary
+            : cs.surfaceContainerHighest.withAlpha(150),
         borderRadius: BorderRadius.circular(20),
         child: InkWell(
           onTap: onTap,
@@ -676,11 +693,22 @@ class _QuickActions extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _buildActionCard(context, 'Public', Icons.forum_rounded, onOpenPublicChat, isPrimary: true),
+        _buildActionCard(
+          context,
+          'Public',
+          Icons.forum_rounded,
+          onOpenPublicChat,
+          isPrimary: true,
+        ),
         const SizedBox(width: 12),
         _buildActionCard(context, 'Nearby', Icons.radar_rounded, onOpenNearby),
         const SizedBox(width: 12),
-        _buildActionCard(context, 'Walkie', Icons.keyboard_voice_rounded, onOpenWalkie),
+        _buildActionCard(
+          context,
+          'Walkie',
+          Icons.keyboard_voice_rounded,
+          onOpenWalkie,
+        ),
       ],
     );
   }
@@ -746,14 +774,14 @@ class _PeerTile extends StatelessWidget {
         onTap: onTap,
         onLongPress: onLongPress,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         leading: Container(
           width: 48,
           height: 48,
           decoration: BoxDecoration(
-            color: canMessage ? cs.primaryContainer : cs.surfaceContainerHighest,
+            color: canMessage
+                ? cs.primaryContainer
+                : cs.surfaceContainerHighest,
             shape: BoxShape.circle,
           ),
           child: Icon(
@@ -771,8 +799,8 @@ class _PeerTile extends StatelessWidget {
           peer.encryptionReady
               ? 'Encrypted private chat ready'
               : canMessage
-                  ? 'Private chat available'
-                  : 'Finishing setup',
+              ? 'Private chat available'
+              : 'Finishing setup',
           style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
         ),
         trailing: Row(
@@ -783,7 +811,9 @@ class _PeerTile extends StatelessWidget {
               const SizedBox(width: 8),
             ],
             Icon(
-              canMessage ? Icons.chevron_right_rounded : Icons.more_horiz_rounded,
+              canMessage
+                  ? Icons.chevron_right_rounded
+                  : Icons.more_horiz_rounded,
               color: cs.onSurfaceVariant,
             ),
           ],

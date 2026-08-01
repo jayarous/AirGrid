@@ -188,508 +188,497 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
         children: [
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: ProfileAvatarBadge(
-                icon: ProfileAvatarCatalog.iconFor(identity.profileIconId),
-                isOnline: isOnline,
-              ),
-              title: Text(identity.displayName?.trim().isNotEmpty == true ? identity.displayName!.trim() : 'Set your profile'),
-              subtitle: const Text('Display name and icon'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                await Navigator.of(context).pushNamed(AppRouter.profileEdit);
-                if (!mounted) return;
-                setState(() {});
-              },
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: ProfileAvatarBadge(
+              icon: ProfileAvatarCatalog.iconFor(identity.profileIconId),
+              isOnline: isOnline,
             ),
-            const Divider(height: 32),
-            Text(
-              'Nearby radar',
-              style: Theme.of(context).textTheme.titleMedium,
+            title: Text(
+              identity.displayName?.trim().isNotEmpty == true
+                  ? identity.displayName!.trim()
+                  : 'Set your profile',
             ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Heading smoothing'),
-              subtitle: Slider(
-                value: _smoothingAlpha,
-                min: nearbyMinSmoothingAlpha,
-                max: nearbyMaxSmoothingAlpha,
-                divisions: 13,
-                label: _smoothingAlpha.toStringAsFixed(2),
-                onChanged: _setSmoothingAlpha,
+            subtitle: const Text('Display name and icon'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              await Navigator.of(context).pushNamed(AppRouter.profileEdit);
+              if (!mounted) return;
+              setState(() {});
+            },
+          ),
+          const Divider(height: 32),
+          Text('Nearby radar', style: Theme.of(context).textTheme.titleMedium),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Heading smoothing'),
+            subtitle: Slider(
+              value: _smoothingAlpha,
+              min: nearbyMinSmoothingAlpha,
+              max: nearbyMaxSmoothingAlpha,
+              divisions: 13,
+              label: _smoothingAlpha.toStringAsFixed(2),
+              onChanged: _setSmoothingAlpha,
+            ),
+            trailing: SizedBox(
+              width: 44,
+              child: Text(
+                _smoothingAlpha.toStringAsFixed(2),
+                textAlign: TextAlign.end,
               ),
-              trailing: SizedBox(
-                width: 44,
-                child: Text(
-                  _smoothingAlpha.toStringAsFixed(2),
-                  textAlign: TextAlign.end,
+            ),
+          ),
+          const Divider(height: 32),
+          Text(
+            'Battery Optimization',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 4),
+          Builder(
+            builder: (ctx) {
+              final batteryOptimizationEnabled = ref.watch(
+                chatControllerProvider.select(
+                  (s) => s.batteryOptimizationEnabled,
                 ),
-              ),
-            ),
-            const Divider(height: 32),
-            Text(
-              'Battery Optimization',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 4),
-            Builder(
-              builder: (ctx) {
-                final batteryOptimizationEnabled = ref.watch(
-                  chatControllerProvider.select(
-                    (s) => s.batteryOptimizationEnabled,
+              );
+              final meshStarted = ref.watch(
+                chatControllerProvider.select((s) => s.meshStarted),
+              );
+              final isMeshStarting = ref.watch(
+                chatControllerProvider.select((s) => s.isMeshStarting),
+              );
+              final playServicesAvailable = ref.watch(
+                chatControllerProvider.select((s) => s.playServicesAvailable),
+              );
+              final isAdvertising = ref.watch(
+                chatControllerProvider.select((s) => s.isAdvertising),
+              );
+              final isDiscovering = ref.watch(
+                chatControllerProvider.select((s) => s.isDiscovering),
+              );
+              final status = isMeshStarting
+                  ? 'Starting'
+                  : meshStarted
+                  ? 'On'
+                  : 'Off';
+              final statusColor = isMeshStarting
+                  ? Colors.orange
+                  : meshStarted
+                  ? Colors.green
+                  : Theme.of(ctx).colorScheme.outline;
+
+              return Column(
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.battery_saver_outlined),
+                    title: const Text('Battery Optimization'),
+                    subtitle: Text(
+                      batteryOptimizationEnabled
+                          ? 'On: AirGrid stops scanning and sharing location in the background to save battery. You may miss nearby messages until you reopen the app.'
+                          : 'Off: AirGrid may continue scanning in the background using Bluetooth and Wi-Fi. This can use more battery and may still be limited by Android.',
+                    ),
+                    value: batteryOptimizationEnabled,
+                    onChanged: (value) => ref
+                        .read(chatControllerProvider.notifier)
+                        .setBatteryOptimizationEnabled(value),
                   ),
-                );
-                final meshStarted = ref.watch(
-                  chatControllerProvider.select((s) => s.meshStarted),
-                );
-                final isMeshStarting = ref.watch(
-                  chatControllerProvider.select((s) => s.isMeshStarting),
-                );
-                final playServicesAvailable = ref.watch(
-                  chatControllerProvider.select((s) => s.playServicesAvailable),
-                );
-                final isAdvertising = ref.watch(
-                  chatControllerProvider.select((s) => s.isAdvertising),
-                );
-                final isDiscovering = ref.watch(
-                  chatControllerProvider.select((s) => s.isDiscovering),
-                );
-                final status = isMeshStarting
-                    ? 'Starting'
-                    : meshStarted
-                    ? 'On'
-                    : 'Off';
-                final statusColor = isMeshStarting
-                    ? Colors.orange
-                    : meshStarted
-                    ? Colors.green
-                    : Theme.of(ctx).colorScheme.outline;
-
-                return Column(
-                  children: [
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.battery_saver_outlined),
-                      title: const Text('Battery Optimization'),
-                      subtitle: Text(
-                        batteryOptimizationEnabled
-                            ? 'On: AirGrid stops scanning and sharing location in the background to save battery. You may miss nearby messages until you reopen the app.'
-                            : 'Off: AirGrid may continue scanning in the background using Bluetooth and Wi-Fi. This can use more battery and may still be limited by Android.',
-                      ),
-                      value: batteryOptimizationEnabled,
-                      onChanged: (value) => ref
-                          .read(chatControllerProvider.notifier)
-                          .setBatteryOptimizationEnabled(value),
-                    ),
-                    if (defaultTargetPlatform == TargetPlatform.android)
-                      FutureBuilder<MeshPermissionsSnapshot>(
-                        future: _permissionsFuture,
-                        builder: (context, snapshot) {
-                          final granted =
-                              snapshot.data?.isGranted(
-                                Permission.ignoreBatteryOptimizations,
-                              ) ??
-                              false;
-                          final color = granted ? Colors.green : Colors.orange;
-                          return ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: Icon(
-                              granted
-                                  ? Icons.battery_charging_full
-                                  : Icons.battery_alert,
-                              color: color,
-                            ),
-                            title: const Text('System battery exemption'),
-                            subtitle: Text(
-                              granted
-                                  ? 'Enabled: Android is less likely to stop AirGrid in background.'
-                                  : 'Disabled: Android may pause background mesh activity.',
-                            ),
-                            trailing: TextButton(
-                              onPressed: granted
-                                  ? _openSystemBatteryOptimizationSettings
-                                  : _requestIgnoreBatteryOptimizations,
-                              child: Text(
-                                granted ? 'Review' : 'Request',
-                                style: TextStyle(color: color),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        meshStarted ? Icons.hub : Icons.hub_outlined,
-                        color: statusColor,
-                      ),
-                      title: const Text('Mesh status'),
-                      subtitle: Text(status),
-                      trailing: TextButton.icon(
-                        onPressed: meshStarted && !isMeshStarting
-                            ? () {
-                                unawaited(
-                                  ref
-                                      .read(chatControllerProvider.notifier)
-                                      .stopMesh(),
-                                );
-                              }
-                            : null,
-                        icon: const Icon(Icons.power_settings_new),
-                        label: const Text('Stop mesh now'),
-                      ),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: Icon(
-                        Icons.wifi_tethering_rounded,
-                        color: isAdvertising
-                            ? Colors.green
-                            : Theme.of(ctx).colorScheme.outline,
-                      ),
-                      title: const Text('Available'),
-                      subtitle: Text(
-                        isAdvertising
-                            ? 'Others nearby can find you.'
-                            : 'You are hidden from new nearby discovery.',
-                      ),
-                      value: playServicesAvailable && isAdvertising,
-                      onChanged:
-                          playServicesAvailable &&
-                              meshStarted &&
-                              !isMeshStarting
-                          ? (value) => ref
-                                .read(chatControllerProvider.notifier)
-                                .setAdvertisingEnabled(value)
-                          : null,
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: Icon(
-                        Icons.radar_rounded,
-                        color: isDiscovering
-                            ? Colors.orange
-                            : Theme.of(ctx).colorScheme.outline,
-                      ),
-                      title: const Text('Scanning'),
-                      subtitle: Text(
-                        isDiscovering
-                            ? 'Looking for nearby AirGrid users.'
-                            : 'Not looking for new nearby users.',
-                      ),
-                      value: playServicesAvailable && isDiscovering,
-                      onChanged:
-                          playServicesAvailable &&
-                              meshStarted &&
-                              !isMeshStarting
-                          ? (value) => ref
-                                .read(chatControllerProvider.notifier)
-                                .setDiscoveryEnabled(value)
-                          : null,
-                    ),
-                  ],
-                );
-              },
-            ),
-            const Divider(height: 32),
-            Text(
-              'Platform support',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            FutureBuilder<PlayServicesStatus>(
-              future: _playServicesFuture,
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
-                final status = snapshot.data!;
-                return _PlayServicesTile(
-                  status: status,
-                  onResolve: status.canResolve
-                      ? () => _resolvePlayServices(status)
-                      : null,
-                );
-              },
-            ),
-            const Divider(height: 32),
-            Text('Permissions', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            FutureBuilder<MeshPermissionsSnapshot>(
-              future: _permissionsFuture,
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
-
-                final permissions = ref.read(meshPermissionsProvider);
-                final permissionsSnapshot = snapshot.data!;
-                final rows = <Permission>[
-                  ...MeshPermissions.criticalPermissions,
-                  ...MeshPermissions.optionalPermissions,
-                ];
-
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ...rows.map((permission) {
-                      final granted = permissionsSnapshot.isGranted(permission);
-                      // Use Mesh Status color scheme: green = granted,
-                      // orange = optional needed, red = mandatory needed / permanently denied.
-                      final isOptional = MeshPermissions.optionalPermissions
-                          .contains(permission);
-                      final permanentlyDenied =
-                          permissionsSnapshot[permission]
-                              ?.isPermanentlyDenied ==
-                          true;
-
-                      final color = granted
-                          ? Colors.green
-                          : permanentlyDenied
-                          ? Colors.red
-                          : isOptional
-                          ? Colors.orange
-                          : Colors.red;
-
-                      final icon = granted
-                          ? Icons.check_circle
-                          : permanentlyDenied
-                          ? Icons.block
-                          : Icons.info_outline;
-
-                      final trailingText = granted ? 'Granted' : 'Needed';
-
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(icon, color: color),
-                        title: Text(permissions.labelFor(permission)),
-                        subtitle: Text(permissions.descriptionFor(permission)),
-                        trailing: Text(
-                          trailingText,
-                          style: TextStyle(color: color),
-                        ),
-                      );
-                    }),
-                    const SizedBox(height: 8),
+                  if (defaultTargetPlatform == TargetPlatform.android)
                     FutureBuilder<MeshPermissionsSnapshot>(
                       future: _permissionsFuture,
                       builder: (context, snapshot) {
-                        // Always offer a shortcut to the system app settings
-                        // so the user can revoke permissions if they want.
-                        final showOpenSettings = true;
-
-                        return Row(
-                          children: [
-                            Expanded(
-                              child: FilledButton.icon(
-                                onPressed: _requestingPermissions
-                                    ? null
-                                    : _requestPermissions,
-                                icon: _requestingPermissions
-                                    ? const SizedBox(
-                                        width: 18,
-                                        height: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.security),
-                                label: const Text('Request permissions'),
-                              ),
+                        final granted =
+                            snapshot.data?.isGranted(
+                              Permission.ignoreBatteryOptimizations,
+                            ) ??
+                            false;
+                        final color = granted ? Colors.green : Colors.orange;
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            granted
+                                ? Icons.battery_charging_full
+                                : Icons.battery_alert,
+                            color: color,
+                          ),
+                          title: const Text('System battery exemption'),
+                          subtitle: Text(
+                            granted
+                                ? 'Enabled: Android is less likely to stop AirGrid in background.'
+                                : 'Disabled: Android may pause background mesh activity.',
+                          ),
+                          trailing: TextButton(
+                            onPressed: granted
+                                ? _openSystemBatteryOptimizationSettings
+                                : _requestIgnoreBatteryOptimizations,
+                            child: Text(
+                              granted ? 'Review' : 'Request',
+                              style: TextStyle(color: color),
                             ),
-                            const SizedBox(width: 12),
-                            if (showOpenSettings)
-                              Expanded(
-                                child: FilledButton.icon(
-                                  onPressed: openAppSettings,
-                                  icon: const Icon(Icons.settings),
-                                  label: const Text('Open system settings'),
-                                ),
-                              ),
-                          ],
+                          ),
                         );
                       },
                     ),
-                  ],
-                );
-              },
-            ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Clear all chats'),
-              subtitle: const Text(
-                'Remove all local chat history (destructive)',
-              ),
-              trailing: const Icon(Icons.delete_forever, color: Colors.red),
-              onTap: () async {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('Clear all chats?'),
-                    content: const Text(
-                      'This will permanently remove all local chat history.',
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      meshStarted ? Icons.hub : Icons.hub_outlined,
+                      color: statusColor,
                     ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(ctx).pop(false),
-                        child: const Text('Cancel'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.of(ctx).pop(true),
-                        child: const Text('Clear'),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirmed == true) {
-                  await ref.read(chatControllerProvider.notifier).clearAllChats();
-                }
-              },
-            ),
-            const Divider(height: 32),
-            Text(
-              'Safety & Privacy',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 4),
-            Builder(
-              builder: (ctx) {
-                final mode = ref.watch(
-                  chatControllerProvider.select((s) => s.privacyMode),
-                );
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.visibility_outlined),
-                  title: const Text('Nearby Visibility'),
-                  subtitle: Text(mode.label),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _showPrivacyModeDialog(ctx, ref, mode),
-                );
-              },
-            ),
-            Builder(
-              builder: (ctx) {
-                final trustedCount = ref.watch(
-                  chatControllerProvider.select((s) => s.trustedNodeIds.length),
-                );
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.verified_outlined),
-                  title: const Text('Invited Friends'),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (trustedCount > 0)
-                        Text(
-                          '$trustedCount',
-                          style: Theme.of(ctx).textTheme.bodyMedium,
-                        ),
-                      const Icon(Icons.chevron_right),
-                    ],
-                  ),
-                  onTap: () =>
-                      Navigator.of(ctx).pushNamed(AppRouter.trustedContacts),
-                );
-              },
-            ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.flag_outlined),
-              title: const Text('Safety Reports'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).pushNamed(AppRouter.reports),
-            ),
-            const Divider(height: 32),
-            Text(
-              'Blocked users',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Builder(
-              builder: (context) {
-                final blockedContacts = ref
-                    .watch(
-                      chatControllerProvider.select((s) => s.knownContacts),
-                    )
-                    .where((c) => c.isBlocked)
-                    .toList();
-                if (blockedContacts.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Text(
-                      'No blocked users',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
-                      ),
+                    title: const Text('Mesh status'),
+                    subtitle: Text(status),
+                    trailing: TextButton.icon(
+                      onPressed: meshStarted && !isMeshStarting
+                          ? () {
+                              unawaited(
+                                ref
+                                    .read(chatControllerProvider.notifier)
+                                    .stopMesh(),
+                              );
+                            }
+                          : null,
+                      icon: const Icon(Icons.power_settings_new),
+                      label: const Text('Stop mesh now'),
                     ),
-                  );
-                }
-                return Column(
-                  children: blockedContacts.map((contact) {
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: Icon(
+                      Icons.wifi_tethering_rounded,
+                      color: isAdvertising
+                          ? Colors.green
+                          : Theme.of(ctx).colorScheme.outline,
+                    ),
+                    title: const Text('Available'),
+                    subtitle: Text(
+                      isAdvertising
+                          ? 'Others nearby can find you.'
+                          : 'You are hidden from new nearby discovery.',
+                    ),
+                    value: playServicesAvailable && isAdvertising,
+                    onChanged:
+                        playServicesAvailable && meshStarted && !isMeshStarting
+                        ? (value) => ref
+                              .read(chatControllerProvider.notifier)
+                              .setAdvertisingEnabled(value)
+                        : null,
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: Icon(
+                      Icons.radar_rounded,
+                      color: isDiscovering
+                          ? Colors.orange
+                          : Theme.of(ctx).colorScheme.outline,
+                    ),
+                    title: const Text('Scanning'),
+                    subtitle: Text(
+                      isDiscovering
+                          ? 'Looking for nearby AirGrid users.'
+                          : 'Not looking for new nearby users.',
+                    ),
+                    value: playServicesAvailable && isDiscovering,
+                    onChanged:
+                        playServicesAvailable && meshStarted && !isMeshStarting
+                        ? (value) => ref
+                              .read(chatControllerProvider.notifier)
+                              .setDiscoveryEnabled(value)
+                        : null,
+                  ),
+                ],
+              );
+            },
+          ),
+          const Divider(height: 32),
+          Text(
+            'Platform support',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          FutureBuilder<PlayServicesStatus>(
+            future: _playServicesFuture,
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              final status = snapshot.data!;
+              return _PlayServicesTile(
+                status: status,
+                onResolve: status.canResolve
+                    ? () => _resolvePlayServices(status)
+                    : null,
+              );
+            },
+          ),
+          const Divider(height: 32),
+          Text('Permissions', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          FutureBuilder<MeshPermissionsSnapshot>(
+            future: _permissionsFuture,
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              final permissions = ref.read(meshPermissionsProvider);
+              final permissionsSnapshot = snapshot.data!;
+              final rows = <Permission>[
+                ...MeshPermissions.criticalPermissions,
+                ...MeshPermissions.optionalPermissions,
+              ];
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ...rows.map((permission) {
+                    final granted = permissionsSnapshot.isGranted(permission);
+                    // Use Mesh Status color scheme: green = granted,
+                    // orange = optional needed, red = mandatory needed / permanently denied.
+                    final isOptional = MeshPermissions.optionalPermissions
+                        .contains(permission);
+                    final permanentlyDenied =
+                        permissionsSnapshot[permission]?.isPermanentlyDenied ==
+                        true;
+
+                    final color = granted
+                        ? Colors.green
+                        : permanentlyDenied
+                        ? Colors.red
+                        : isOptional
+                        ? Colors.orange
+                        : Colors.red;
+
+                    final icon = granted
+                        ? Icons.check_circle
+                        : permanentlyDenied
+                        ? Icons.block
+                        : Icons.info_outline;
+
+                    final trailingText = granted ? 'Granted' : 'Needed';
+
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: Text(contact.displayName),
-                      trailing: TextButton(
-                        onPressed: () async {
-                          await ref
-                              .read(chatControllerProvider.notifier)
-                              .unblockUser(contact.nodeId);
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Unblocked'),
-                              duration: Duration(seconds: 2),
-                              behavior: SnackBarBehavior.floating,
-                            ),
-                          );
-                        },
-                        child: const Text('Unblock'),
+                      leading: Icon(icon, color: color),
+                      title: Text(permissions.labelFor(permission)),
+                      subtitle: Text(permissions.descriptionFor(permission)),
+                      trailing: Text(
+                        trailingText,
+                        style: TextStyle(color: color),
                       ),
                     );
-                  }).toList(),
-                );
-              },
-            ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Node ID'),
-              subtitle: Text(
-                identity.nodeId,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
-            ),
-            const SizedBox(height: 18),
-            FutureBuilder<PackageInfo>(
-              future: _packageInfoFuture,
-              builder: (context, snapshot) {
-                final info = snapshot.data;
-                final versionLabel =
-                    snapshot.connectionState == ConnectionState.waiting
-                    ? 'App version loading...'
-                    : snapshot.hasError || info == null
-                    ? 'App version unavailable'
-                    : 'App version ${info.version}+${info.buildNumber}';
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Center(
-                    child: Text(
-                      versionLabel,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
+                  }),
+                  const SizedBox(height: 8),
+                  FutureBuilder<MeshPermissionsSnapshot>(
+                    future: _permissionsFuture,
+                    builder: (context, snapshot) {
+                      // Always offer a shortcut to the system app settings
+                      // so the user can revoke permissions if they want.
+                      final showOpenSettings = true;
+
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: _requestingPermissions
+                                  ? null
+                                  : _requestPermissions,
+                              icon: _requestingPermissions
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.security),
+                              label: const Text('Request permissions'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          if (showOpenSettings)
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: openAppSettings,
+                                icon: const Icon(Icons.settings),
+                                label: const Text('Open system settings'),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              );
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Clear all chats'),
+            subtitle: const Text('Remove all local chat history (destructive)'),
+            trailing: const Icon(Icons.delete_forever, color: Colors.red),
+            onTap: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Clear all chats?'),
+                  content: const Text(
+                    'This will permanently remove all local chat history.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      child: const Text('Clear'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirmed == true) {
+                await ref.read(chatControllerProvider.notifier).clearAllChats();
+              }
+            },
+          ),
+          const Divider(height: 32),
+          Text(
+            'Safety & Privacy',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 4),
+          Builder(
+            builder: (ctx) {
+              final mode = ref.watch(
+                chatControllerProvider.select((s) => s.privacyMode),
+              );
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.visibility_outlined),
+                title: const Text('Nearby Visibility'),
+                subtitle: Text(mode.label),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _showPrivacyModeDialog(ctx, ref, mode),
+              );
+            },
+          ),
+          Builder(
+            builder: (ctx) {
+              final trustedCount = ref.watch(
+                chatControllerProvider.select((s) => s.trustedNodeIds.length),
+              );
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.verified_outlined),
+                title: const Text('Invited Friends'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (trustedCount > 0)
+                      Text(
+                        '$trustedCount',
+                        style: Theme.of(ctx).textTheme.bodyMedium,
                       ),
+                    const Icon(Icons.chevron_right),
+                  ],
+                ),
+                onTap: () =>
+                    Navigator.of(ctx).pushNamed(AppRouter.trustedContacts),
+              );
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.flag_outlined),
+            title: const Text('Safety Reports'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).pushNamed(AppRouter.reports),
+          ),
+          const Divider(height: 32),
+          Text('Blocked users', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Builder(
+            builder: (context) {
+              final blockedContacts = ref
+                  .watch(chatControllerProvider.select((s) => s.knownContacts))
+                  .where((c) => c.isBlocked)
+                  .toList();
+              if (blockedContacts.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No blocked users',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.outline,
                     ),
                   ),
                 );
-              },
+              }
+              return Column(
+                children: blockedContacts.map((contact) {
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(contact.displayName),
+                    trailing: TextButton(
+                      onPressed: () async {
+                        await ref
+                            .read(chatControllerProvider.notifier)
+                            .unblockUser(contact.nodeId);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Unblocked'),
+                            duration: Duration(seconds: 2),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                      child: const Text('Unblock'),
+                    ),
+                  );
+                }).toList(),
+              );
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Node ID'),
+            subtitle: Text(
+              identity.nodeId,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
-          ],
+          ),
+          const SizedBox(height: 18),
+          FutureBuilder<PackageInfo>(
+            future: _packageInfoFuture,
+            builder: (context, snapshot) {
+              final info = snapshot.data;
+              final versionLabel =
+                  snapshot.connectionState == ConnectionState.waiting
+                  ? 'App version loading...'
+                  : snapshot.hasError || info == null
+                  ? 'App version unavailable'
+                  : 'App version ${info.version}+${info.buildNumber}';
+              return Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Center(
+                  child: Text(
+                    versionLabel,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }

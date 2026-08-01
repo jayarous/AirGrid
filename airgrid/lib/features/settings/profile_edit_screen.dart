@@ -23,7 +23,9 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
     super.initState();
     final identity = ref.read(localIdentityStoreProvider);
     _nameController = TextEditingController(text: identity.displayName ?? '');
-    _statusController = TextEditingController(text: identity.profileStatus ?? '');
+    _statusController = TextEditingController(
+      text: identity.profileStatus ?? '',
+    );
     final initialId = identity.profileIconId;
     _selectedIconId = ProfileAvatarCatalog.containsId(initialId)
         ? initialId
@@ -160,7 +162,9 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                   onTap: () => setState(() => _selectedIconId = option.id),
                   child: Ink(
                     decoration: BoxDecoration(
-                      color: isSelected ? cs.primaryContainer : cs.surfaceContainerHigh,
+                      color: isSelected
+                          ? cs.primaryContainer
+                          : cs.surfaceContainerHigh,
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: isSelected ? cs.primary : cs.outlineVariant,
@@ -172,7 +176,9 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                       children: [
                         Icon(
                           option.icon,
-                          color: isSelected ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+                          color: isSelected
+                              ? cs.onPrimaryContainer
+                              : cs.onSurfaceVariant,
                         ),
                         const SizedBox(height: 6),
                         Text(

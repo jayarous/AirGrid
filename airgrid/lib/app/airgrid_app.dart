@@ -105,14 +105,10 @@ class _AirGridAppState extends ConsumerState<AirGridApp> {
       title: 'AirGrid',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1B6CA8),
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1B6CA8)),
       ),
       darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1B6CA8),
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1B6CA8)),
       ),
       initialRoute: initialRoute,
       onGenerateRoute: AppRouter.onGenerateRoute,

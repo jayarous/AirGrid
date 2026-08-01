@@ -55,12 +55,10 @@ Future<LocalIdentityStore> _identity() async {
 }
 
 Future<void> _pumpWalkie(
-  WidgetTester tester,
-  {
-    FakeTransport? transport,
-    FakeForegroundService? foreground,
-  }
-) async {
+  WidgetTester tester, {
+  FakeTransport? transport,
+  FakeForegroundService? foreground,
+}) async {
   final fg = foreground ?? FakeForegroundService();
   final tx = transport ?? FakeTransport();
   addTearDown(fg.dispose);
@@ -76,7 +74,9 @@ Future<void> _pumpWalkie(
         ),
         foregroundServiceProvider.overrideWithValue(fg),
         cryptoServiceProvider.overrideWithValue(CryptoService()),
-        knownContactStoreProvider.overrideWithValue(InMemoryKnownContactStore()),
+        knownContactStoreProvider.overrideWithValue(
+          InMemoryKnownContactStore(),
+        ),
         localReportStoreProvider.overrideWithValue(InMemoryLocalReportStore()),
         privacySettingsStoreProvider.overrideWithValue(
           InMemoryPrivacySettingsStore(),
@@ -115,9 +115,11 @@ void main() {
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).selectConversation(
-      const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
-    );
+    container
+        .read(chatControllerProvider.notifier)
+        .selectConversation(
+          const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
+        );
     await tester.pumpAndSettle();
 
     expect(find.text('CH-ALEX'), findsOneWidget);
@@ -128,11 +130,7 @@ void main() {
   ) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    await _pumpWalkie(
-      tester,
-      transport: transport,
-      foreground: foreground,
-    );
+    await _pumpWalkie(tester, transport: transport, foreground: foreground);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
@@ -151,16 +149,18 @@ void main() {
     expect(find.text('Channel 01: Alex'), findsOneWidget);
   });
 
-  testWidgets('renders walkie last error from controller state', (tester) async {
+  testWidgets('renders walkie last error from controller state', (
+    tester,
+  ) async {
     await _pumpWalkie(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).setWalkieLastError(
-      'Peer is not online',
-    );
+    container
+        .read(chatControllerProvider.notifier)
+        .setWalkieLastError('Peer is not online');
     await tester.pumpAndSettle();
 
     expect(find.text('Peer is not online'), findsOneWidget);
@@ -175,9 +175,9 @@ void main() {
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).setWalkieSending(
-      isSending: true,
-    );
+    container
+        .read(chatControllerProvider.notifier)
+        .setWalkieSending(isSending: true);
     // Not pumpAndSettle: sending starts the speaker pulse, a repeating
     // animation that never settles, so pumpAndSettle would time out.
     await tester.pump();
@@ -204,11 +204,7 @@ void main() {
   testWidgets('invite action is shown for an online peer', (tester) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    await _pumpWalkie(
-      tester,
-      transport: transport,
-      foreground: foreground,
-    );
+    await _pumpWalkie(tester, transport: transport, foreground: foreground);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),

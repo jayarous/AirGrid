@@ -141,10 +141,7 @@ void _blockingTests(
   });
 }
 
-void _trustTests(
-  String label,
-  Future<KnownContactStore> Function() makeStore,
-) {
+void _trustTests(String label, Future<KnownContactStore> Function() makeStore) {
   group(label, () {
     late KnownContactStore store;
 
@@ -270,24 +267,27 @@ void _sharedPrefsTests() {
       await store2.dispose();
     });
 
-    test('backward compat: JSON without isBlocked field loads as false', () async {
-      // Seed SharedPrefs with old-format JSON (no isBlocked field).
-      final legacy = jsonEncode([
-        {
-          'nodeId': 'node-old',
-          'displayName': 'OldNode',
-          'publicKeyBase64': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-          'lastSeenAt': DateTime(2024).millisecondsSinceEpoch,
-        }
-      ]);
-      SharedPreferences.setMockInitialValues({
-        'airgrid_known_contacts': legacy,
-      });
+    test(
+      'backward compat: JSON without isBlocked field loads as false',
+      () async {
+        // Seed SharedPrefs with old-format JSON (no isBlocked field).
+        final legacy = jsonEncode([
+          {
+            'nodeId': 'node-old',
+            'displayName': 'OldNode',
+            'publicKeyBase64': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            'lastSeenAt': DateTime(2024).millisecondsSinceEpoch,
+          },
+        ]);
+        SharedPreferences.setMockInitialValues({
+          'airgrid_known_contacts': legacy,
+        });
 
-      final store = await SharedPrefsKnownContactStore.create();
-      expect(store.isBlocked('node-old'), isFalse);
-      await store.dispose();
-    });
+        final store = await SharedPrefsKnownContactStore.create();
+        expect(store.isBlocked('node-old'), isFalse);
+        await store.dispose();
+      },
+    );
 
     test('block status persists after unblock and re-block', () async {
       final store1 = await SharedPrefsKnownContactStore.create();
@@ -343,13 +343,10 @@ void main() {
 
   group('SharedPrefsKnownContactStore — trust', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
-    _trustTests(
-      'SharedPrefsKnownContactStore (trust contract)',
-      () async {
-        SharedPreferences.setMockInitialValues({});
-        return SharedPrefsKnownContactStore.create();
-      },
-    );
+    _trustTests('SharedPrefsKnownContactStore (trust contract)', () async {
+      SharedPreferences.setMockInitialValues({});
+      return SharedPrefsKnownContactStore.create();
+    });
   });
 
   _sharedPrefsTests();

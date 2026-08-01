@@ -395,9 +395,12 @@ void main() {
       tester.element(find.byType(ChatScreen)),
     );
 
-    final beforeAdvertising =
-        container.read(chatControllerProvider).isAdvertising;
-    final beforeDiscovering = container.read(chatControllerProvider).isDiscovering;
+    final beforeAdvertising = container
+        .read(chatControllerProvider)
+        .isAdvertising;
+    final beforeDiscovering = container
+        .read(chatControllerProvider)
+        .isDiscovering;
 
     await tester.tap(find.text('Available'));
     await tester.pump();

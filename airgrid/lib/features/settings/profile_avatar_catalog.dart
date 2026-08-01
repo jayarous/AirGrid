@@ -18,14 +18,34 @@ class ProfileAvatarCatalog {
   static const String defaultId = 'person';
 
   static const List<ProfileAvatarOption> options = [
-    ProfileAvatarOption(id: 'person', icon: Icons.person_rounded, label: 'Person'),
+    ProfileAvatarOption(
+      id: 'person',
+      icon: Icons.person_rounded,
+      label: 'Person',
+    ),
     ProfileAvatarOption(id: 'face', icon: Icons.face_rounded, label: 'Face'),
-    ProfileAvatarOption(id: 'sentiment', icon: Icons.sentiment_satisfied_alt_rounded, label: 'Smile'),
-    ProfileAvatarOption(id: 'rocket', icon: Icons.rocket_launch_rounded, label: 'Rocket'),
+    ProfileAvatarOption(
+      id: 'sentiment',
+      icon: Icons.sentiment_satisfied_alt_rounded,
+      label: 'Smile',
+    ),
+    ProfileAvatarOption(
+      id: 'rocket',
+      icon: Icons.rocket_launch_rounded,
+      label: 'Rocket',
+    ),
     ProfileAvatarOption(id: 'bolt', icon: Icons.bolt_rounded, label: 'Bolt'),
-    ProfileAvatarOption(id: 'shield', icon: Icons.shield_rounded, label: 'Shield'),
+    ProfileAvatarOption(
+      id: 'shield',
+      icon: Icons.shield_rounded,
+      label: 'Shield',
+    ),
     ProfileAvatarOption(id: 'pets', icon: Icons.pets_rounded, label: 'Paw'),
-    ProfileAvatarOption(id: 'sports', icon: Icons.sports_esports_rounded, label: 'Gamepad'),
+    ProfileAvatarOption(
+      id: 'sports',
+      icon: Icons.sports_esports_rounded,
+      label: 'Gamepad',
+    ),
   ];
 
   static IconData iconFor(String? id) {

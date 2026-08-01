@@ -44,17 +44,17 @@ Future<void> showPeerProfileSheet(
             const SizedBox(height: 14),
             Text(
               profile.displayName,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
             if (status != null && status.isNotEmpty) ...[
               const SizedBox(height: 6),
               Text(
                 status,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
             ],

@@ -527,40 +527,45 @@ void main() {
     expect(prefsStore.currentShowClosedChats, isTrue);
   });
 
-  test('closePrivateChat closes thread and resets selected conversation', () async {
-    final transport = FakeTransport();
-    final foreground = FakeForegroundService();
-    final playServices = FakePlayServices(const PlayServicesStatus.available());
-    final contacts = InMemoryKnownContactStore();
-    await contacts.upsert(
-      KnownContact(
-        nodeId: 'node-1',
-        displayName: 'Peer 1',
-        publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-        lastSeenAt: DateTime(2026, 1, 1),
-      ),
-    );
-    final container = _container(
-      transport: transport,
-      playServices: playServices,
-      foreground: foreground,
-      identity: await _identity(),
-      contactStore: contacts,
-    );
-    addTearDown(container.dispose);
-    addTearDown(foreground.dispose);
+  test(
+    'closePrivateChat closes thread and resets selected conversation',
+    () async {
+      final transport = FakeTransport();
+      final foreground = FakeForegroundService();
+      final playServices = FakePlayServices(
+        const PlayServicesStatus.available(),
+      );
+      final contacts = InMemoryKnownContactStore();
+      await contacts.upsert(
+        KnownContact(
+          nodeId: 'node-1',
+          displayName: 'Peer 1',
+          publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+          lastSeenAt: DateTime(2026, 1, 1),
+        ),
+      );
+      final container = _container(
+        transport: transport,
+        playServices: playServices,
+        foreground: foreground,
+        identity: await _identity(),
+        contactStore: contacts,
+      );
+      addTearDown(container.dispose);
+      addTearDown(foreground.dispose);
 
-    final controller = container.read(chatControllerProvider.notifier);
-    controller.selectConversation(
-      const PrivateConversation(peerNodeId: 'node-1', peerName: 'Peer 1'),
-    );
+      final controller = container.read(chatControllerProvider.notifier);
+      controller.selectConversation(
+        const PrivateConversation(peerNodeId: 'node-1', peerName: 'Peer 1'),
+      );
 
-    await controller.closePrivateChat('node-1');
-    final state = container.read(chatControllerProvider);
-    expect(contacts.isChatClosed('node-1'), isTrue);
-    expect(state.selectedConversation, isA<PublicConversation>());
+      await controller.closePrivateChat('node-1');
+      final state = container.read(chatControllerProvider);
+      expect(contacts.isChatClosed('node-1'), isTrue);
+      expect(state.selectedConversation, isA<PublicConversation>());
 
-    await controller.reopenPrivateChat('node-1');
-    expect(contacts.isChatClosed('node-1'), isFalse);
-  });
+      await controller.reopenPrivateChat('node-1');
+      expect(contacts.isChatClosed('node-1'), isFalse);
+    },
+  );
 }

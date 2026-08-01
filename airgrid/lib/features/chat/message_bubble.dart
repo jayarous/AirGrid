@@ -42,203 +42,205 @@ class MessageBubble extends ConsumerWidget {
     final cs = Theme.of(context).colorScheme;
     final isLocal = message.isLocal;
     final isMedia =
-      message.messageKind == 'image' ||
-      message.messageKind == 'audio' ||
-      message.messageKind == 'file';
+        message.messageKind == 'image' ||
+        message.messageKind == 'audio' ||
+        message.messageKind == 'file';
 
-    final bubbleColor = isLocal
-        ? cs.primaryContainer
-        : cs.surfaceContainerHigh;
+    final bubbleColor = isLocal ? cs.primaryContainer : cs.surfaceContainerHigh;
     final textColor = isLocal ? cs.onPrimaryContainer : cs.onSurface;
     final h = message.timestamp.hour.toString().padLeft(2, '0');
     final m = message.timestamp.minute.toString().padLeft(2, '0');
     final timeStr = '$h:$m';
 
     return GestureDetector(
-      onLongPress: isLocal
-          ? null
-          : () => _showModerationSheet(context, ref),
+      onLongPress: isLocal ? null : () => _showModerationSheet(context, ref),
       child: Align(
-      alignment: isLocal ? Alignment.centerRight : Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 13),
-          decoration: BoxDecoration(
-            color: bubbleColor,
-            borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(18),
-              topRight: const Radius.circular(18),
-              bottomLeft: Radius.circular(isLocal ? 18 : 4),
-              bottomRight: Radius.circular(isLocal ? 4 : 18),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha(8),
-                blurRadius: 2,
-                offset: const Offset(0, 1),
+        alignment: isLocal ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.75,
+          ),
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 13),
+            decoration: BoxDecoration(
+              color: bubbleColor,
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(18),
+                topRight: const Radius.circular(18),
+                bottomLeft: Radius.circular(isLocal ? 18 : 4),
+                bottomRight: Radius.circular(isLocal ? 4 : 18),
               ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (!isLocal)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 3),
-                  child: Text(
-                    message.senderName,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: _getSenderColor(message.senderName),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha(8),
+                  blurRadius: 2,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!isLocal)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Text(
+                      message.senderName,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: _getSenderColor(message.senderName),
+                      ),
                     ),
                   ),
-                ),
-              if (isMedia)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (message.messageKind == 'image')
-                      _ImageMessageContent(
-                        message: message,
-                        textColor: textColor,
-                      )
-                    else if (message.messageKind == 'audio')
-                      _AudioMessageContent(
-                        message: message,
-                        textColor: textColor,
-                        isLocal: isLocal,
-                      )
-                    else
-                      _FileMessageContent(
-                        message: message,
-                        textColor: textColor,
-                        isLocal: isLocal,
+                if (isMedia)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (message.messageKind == 'image')
+                        _ImageMessageContent(
+                          message: message,
+                          textColor: textColor,
+                        )
+                      else if (message.messageKind == 'audio')
+                        _AudioMessageContent(
+                          message: message,
+                          textColor: textColor,
+                          isLocal: isLocal,
+                        )
+                      else
+                        _FileMessageContent(
+                          message: message,
+                          textColor: textColor,
+                          isLocal: isLocal,
+                        ),
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (message.isEncrypted &&
+                                message.conversationType == 'private')
+                              Padding(
+                                padding: const EdgeInsets.only(right: 3),
+                                child: Icon(
+                                  Icons.lock,
+                                  size: 11,
+                                  color: textColor.withAlpha(140),
+                                ),
+                              ),
+                            Text(
+                              timeStr,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                                color: textColor.withAlpha(140),
+                              ),
+                            ),
+                            if (message.isLocal &&
+                                message.conversationType == 'private')
+                              Padding(
+                                padding: const EdgeInsets.only(left: 3),
+                                child: _statusIcon(
+                                  context,
+                                  message.deliveryStatus,
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                    const SizedBox(height: 6),
-                    Align(
+                    ],
+                  )
+                else
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          message.content,
+                          style: TextStyle(
+                            color: textColor,
+                            fontSize: 15,
+                            height: 1.25,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (message.isEncrypted &&
+                                message.conversationType == 'private')
+                              Padding(
+                                padding: const EdgeInsets.only(right: 3),
+                                child: Icon(
+                                  Icons.lock,
+                                  size: 11,
+                                  color: textColor.withAlpha(140),
+                                ),
+                              ),
+                            Text(
+                              timeStr,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                                color: textColor.withAlpha(140),
+                              ),
+                            ),
+                            if (message.isLocal &&
+                                message.conversationType == 'private')
+                              Padding(
+                                padding: const EdgeInsets.only(left: 3),
+                                child: _statusIcon(
+                                  context,
+                                  message.deliveryStatus,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                if (message.isLocal &&
+                    message.conversationType == 'private' &&
+                    message.messageKind == 'image' &&
+                    message.deliveryStatus != DeliveryStatus.delivered &&
+                    message.deliveryStatus != DeliveryStatus.read)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Align(
                       alignment: Alignment.centerRight,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (message.isEncrypted &&
-                              message.conversationType == 'private')
-                            Padding(
-                              padding: const EdgeInsets.only(right: 3),
-                              child: Icon(
-                                Icons.lock,
-                                size: 11,
-                                color: textColor.withAlpha(140),
-                              ),
-                            ),
-                          Text(
-                            timeStr,
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w500,
-                              color: textColor.withAlpha(140),
-                            ),
+                      child: TextButton.icon(
+                        onPressed: () => _retryImage(context, ref),
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          foregroundColor: cs.error,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
                           ),
-                          if (message.isLocal &&
-                              message.conversationType == 'private')
-                            Padding(
-                              padding: const EdgeInsets.only(left: 3),
-                              child: _statusIcon(context, message.deliveryStatus),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
-              else
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        message.content,
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize: 15,
-                          height: 1.25,
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (message.isEncrypted &&
-                              message.conversationType == 'private')
-                            Padding(
-                              padding: const EdgeInsets.only(right: 3),
-                              child: Icon(
-                                Icons.lock,
-                                size: 11,
-                                color: textColor.withAlpha(140),
-                              ),
-                            ),
-                          Text(
-                            timeStr,
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w500,
-                              color: textColor.withAlpha(140),
-                            ),
-                          ),
-                          if (message.isLocal &&
-                              message.conversationType == 'private')
-                            Padding(
-                              padding: const EdgeInsets.only(left: 3),
-                              child: _statusIcon(context, message.deliveryStatus),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              if (message.isLocal &&
-                  message.conversationType == 'private' &&
-                  message.messageKind == 'image' &&
-                  message.deliveryStatus != DeliveryStatus.delivered &&
-                  message.deliveryStatus != DeliveryStatus.read)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      onPressed: () => _retryImage(context, ref),
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        foregroundColor: cs.error,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
+                        icon: const Icon(Icons.refresh_rounded, size: 14),
+                        label: Text(
+                          message.deliveryStatus == DeliveryStatus.failed
+                              ? 'Retry'
+                              : 'Resend',
+                          style: const TextStyle(fontSize: 11),
                         ),
-                      ),
-                      icon: const Icon(Icons.refresh_rounded, size: 14),
-                      label: Text(
-                        message.deliveryStatus == DeliveryStatus.failed
-                            ? 'Retry'
-                            : 'Resend',
-                        style: const TextStyle(fontSize: 11),
                       ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -246,7 +248,7 @@ class MessageBubble extends ConsumerWidget {
   Future<void> _retryImage(BuildContext context, WidgetRef ref) async {
     final result = await ref
         .read(chatControllerProvider.notifier)
-      .retryImageMessage(message);
+        .retryImageMessage(message);
 
     if (!context.mounted) return;
 
@@ -325,10 +327,7 @@ class MessageBubble extends ConsumerWidget {
                 value: selectedReason,
                 items: ReportReason.values
                     .map(
-                      (r) => DropdownMenuItem(
-                        value: r,
-                        child: Text(r.label),
-                      ),
+                      (r) => DropdownMenuItem(value: r, child: Text(r.label)),
                     )
                     .toList(),
                 onChanged: (r) {
@@ -354,7 +353,9 @@ class MessageBubble extends ConsumerWidget {
             FilledButton(
               onPressed: () {
                 Navigator.pop(ctx);
-                ref.read(chatControllerProvider.notifier).reportMessage(
+                ref
+                    .read(chatControllerProvider.notifier)
+                    .reportMessage(
                       message: message,
                       reason: selectedReason,
                       notes: notesController.text.trim().isEmpty
@@ -372,6 +373,7 @@ class MessageBubble extends ConsumerWidget {
       ),
     );
   }
+
   Widget _statusIcon(BuildContext context, DeliveryStatus status) {
     final cs = Theme.of(context).colorScheme;
     final dimColor = cs.onPrimaryContainer.withAlpha(140);
@@ -572,8 +574,10 @@ class _AudioMessageContentState extends State<_AudioMessageContent> {
                   ? duration
                   : const Duration(seconds: 1);
               final progress =
-                  (position.inMilliseconds / safeDuration.inMilliseconds)
-                      .clamp(0.0, 1.0);
+                  (position.inMilliseconds / safeDuration.inMilliseconds).clamp(
+                    0.0,
+                    1.0,
+                  );
 
               return Row(
                 children: [
@@ -662,11 +666,12 @@ class _FileMessageContent extends StatelessWidget {
     final fileName = _displayFileName();
     final sizeLabel = _formatFileSize(message.mediaByteLength ?? 0);
     final progress = message.mediaTransferProgress;
-    final isSending = isLocal &&
-      progress != null &&
-      progress > 0 &&
-      progress < 1 &&
-      message.deliveryStatus == DeliveryStatus.pending;
+    final isSending =
+        isLocal &&
+        progress != null &&
+        progress > 0 &&
+        progress < 1 &&
+        message.deliveryStatus == DeliveryStatus.pending;
 
     return GestureDetector(
       onTap: () => _openFileAttachment(context),
@@ -682,11 +687,7 @@ class _FileMessageContent extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              Icons.insert_drive_file_outlined,
-              color: textColor,
-              size: 28,
-            ),
+            Icon(Icons.insert_drive_file_outlined, color: textColor, size: 28),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -866,12 +867,7 @@ class _ZoomableImageThumbnail extends StatelessWidget {
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
           child: file != null
-              ? Image.file(
-                  file!,
-                  width: 180,
-                  height: 120,
-                  fit: BoxFit.cover,
-                )
+              ? Image.file(file!, width: 180, height: 120, fit: BoxFit.cover)
               : Image.memory(
                   bytes!,
                   width: 180,
@@ -890,11 +886,7 @@ class _ZoomableImageThumbnail extends StatelessWidget {
         barrierDismissible: true,
         barrierColor: Colors.black.withAlpha(220),
         pageBuilder: (context, animation, secondaryAnimation) {
-          return _ImageViewerPage(
-            file: file,
-            bytes: bytes,
-            heroTag: heroTag,
-          );
+          return _ImageViewerPage(file: file, bytes: bytes, heroTag: heroTag);
         },
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(opacity: animation, child: child);

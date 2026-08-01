@@ -56,13 +56,14 @@ class TrustedContactsScreen extends ConsumerWidget {
                     ? '${contact.nodeId.substring(0, 12)}…'
                     : contact.nodeId;
                 return ListTile(
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.verified),
-                  ),
+                  leading: const CircleAvatar(child: Icon(Icons.verified)),
                   title: Text(contact.displayName),
                   subtitle: Text(
                     nodeSnippet,
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
                   ),
                   isThreeLine: true,
                   trailing: SizedBox(
@@ -77,7 +78,10 @@ class TrustedContactsScreen extends ConsumerWidget {
                               ? (enabled) async {
                                   await ref
                                       .read(chatControllerProvider.notifier)
-                                      .setWalkieAlwaysOn(contact.nodeId, enabled);
+                                      .setWalkieAlwaysOn(
+                                        contact.nodeId,
+                                        enabled,
+                                      );
                                 }
                               : null,
                         ),

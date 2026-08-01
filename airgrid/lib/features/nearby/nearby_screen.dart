@@ -126,26 +126,27 @@ class NearbyScreen extends ConsumerWidget {
                               );
                           Navigator.of(context).pushNamed(AppRouter.walkie);
                         },
-                  isTrusted: peer.nodeId != null &&
+                  isTrusted:
+                      peer.nodeId != null &&
                       state.trustedNodeIds.contains(peer.nodeId),
                   onTrust: peer.nodeId == null
                       ? null
                       : () => ref
-                          .read(chatControllerProvider.notifier)
-                          .trustContact(peer.nodeId!),
+                            .read(chatControllerProvider.notifier)
+                            .trustContact(peer.nodeId!),
                   onUntrust: peer.nodeId == null
                       ? null
                       : () => ref
-                          .read(chatControllerProvider.notifier)
-                          .untrustContact(peer.nodeId!),
+                            .read(chatControllerProvider.notifier)
+                            .untrustContact(peer.nodeId!),
                   onReport: peer.nodeId == null
                       ? null
                       : () => _showReportUserDialog(
-                            context,
-                            ref,
-                            peer.nodeId!,
-                            peer.displayName,
-                          ),
+                          context,
+                          ref,
+                          peer.nodeId!,
+                          peer.displayName,
+                        ),
                   onBlock: peer.nodeId == null
                       ? null
                       : () async {
@@ -213,12 +214,7 @@ void _showReportUserDialog(
               isExpanded: true,
               value: selectedReason,
               items: ReportReason.values
-                  .map(
-                    (r) => DropdownMenuItem(
-                      value: r,
-                      child: Text(r.label),
-                    ),
-                  )
+                  .map((r) => DropdownMenuItem(value: r, child: Text(r.label)))
                   .toList(),
               onChanged: (r) {
                 if (r != null) setState(() => selectedReason = r);
@@ -243,7 +239,9 @@ void _showReportUserDialog(
           FilledButton(
             onPressed: () {
               Navigator.pop(ctx);
-              ref.read(chatControllerProvider.notifier).reportUser(
+              ref
+                  .read(chatControllerProvider.notifier)
+                  .reportUser(
                     reportedNodeId: reportedNodeId,
                     reportedDisplayName: reportedDisplayName,
                     reason: selectedReason,
@@ -251,9 +249,9 @@ void _showReportUserDialog(
                         ? null
                         : notesController.text.trim(),
                   );
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Report submitted')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Report submitted')));
             },
             child: const Text('Submit'),
           ),

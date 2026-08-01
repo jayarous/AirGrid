@@ -96,39 +96,36 @@ void main() {
   });
 
   group('oversize private file', () {
-    test(
-      'a file at the UI cap must not be reported as sent',
-      () async {
-        // 4.8 MB is under kPrivateFileMaxBytes (5 MB) so the UI allows it,
-        // but exceeds what the encode chain can carry.
-        final file = _fileOfSize(4800 * 1024);
+    test('a file at the UI cap must not be reported as sent', () async {
+      // 4.8 MB is under kPrivateFileMaxBytes (5 MB) so the UI allows it,
+      // but exceeds what the encode chain can carry.
+      final file = _fileOfSize(4800 * 1024);
 
-        final statuses = <DeliveryStatus>[];
-        final sub = mesh.statusStream.listen((e) => statuses.add(e.status));
+      final statuses = <DeliveryStatus>[];
+      final sub = mesh.statusStream.listen((e) => statuses.add(e.status));
 
-        final result = await mesh.sendPrivateFile(peer, file);
-        await Future<void>.delayed(Duration.zero);
+      final result = await mesh.sendPrivateFile(peer, file);
+      await Future<void>.delayed(Duration.zero);
 
-        expect(
-          result,
-          PrivateSendResult.failed,
-          reason: 'an unencodable packet must never report success',
-        );
-        expect(
-          statuses,
-          isNot(contains(DeliveryStatus.sent)),
-          reason: 'the bubble must not show as sent',
-        );
-        expect(statuses, contains(DeliveryStatus.failed));
-        expect(
-          transport.sentPayloads,
-          isEmpty,
-          reason: 'nothing should reach the transport',
-        );
+      expect(
+        result,
+        PrivateSendResult.failed,
+        reason: 'an unencodable packet must never report success',
+      );
+      expect(
+        statuses,
+        isNot(contains(DeliveryStatus.sent)),
+        reason: 'the bubble must not show as sent',
+      );
+      expect(statuses, contains(DeliveryStatus.failed));
+      expect(
+        transport.sentPayloads,
+        isEmpty,
+        reason: 'nothing should reach the transport',
+      );
 
-        await sub.cancel();
-      },
-    );
+      await sub.cancel();
+    });
 
     test('a small file still sends encrypted', () async {
       final file = _fileOfSize(64 * 1024);
@@ -139,31 +136,28 @@ void main() {
       expect(transport.sentPayloads, isNotEmpty);
     });
 
-    test(
-      'size caps are arithmetically coherent with the packet ceiling',
-      () {
-        // Two base64 layers apply before the codec size check. If this fails,
-        // the UI cap permits files the pipeline cannot carry.
-        const b64 = 4 / 3;
-        const aeadOverhead = 28; // nonce[12] + mac[16]
-        const envelopeOverhead = 512; // JSON keys, transferId, fileName, mime
+    test('size caps are arithmetically coherent with the packet ceiling', () {
+      // Two base64 layers apply before the codec size check. If this fails,
+      // the UI cap permits files the pipeline cannot carry.
+      const b64 = 4 / 3;
+      const aeadOverhead = 28; // nonce[12] + mac[16]
+      const envelopeOverhead = 512; // JSON keys, transferId, fileName, mime
 
-        final worstCaseContent =
-            ((AirGridConstants.kPrivateFileMaxBytes * b64 + envelopeOverhead) +
-                    aeadOverhead) *
-                b64;
+      final worstCaseContent =
+          ((AirGridConstants.kPrivateFileMaxBytes * b64 + envelopeOverhead) +
+              aeadOverhead) *
+          b64;
 
-        expect(
-          worstCaseContent,
-          lessThan(AirGridConstants.kMaxPacketBytes),
-          reason:
-              'kPrivateFileMaxBytes (${AirGridConstants.kPrivateFileMaxBytes}) '
-              'expands to ~${worstCaseContent.round()} bytes of packet '
-              'content, which exceeds kMaxPacketBytes '
-              '(${AirGridConstants.kMaxPacketBytes}). Lower the file cap or '
-              'raise the packet ceiling.',
-        );
-      },
-    );
+      expect(
+        worstCaseContent,
+        lessThan(AirGridConstants.kMaxPacketBytes),
+        reason:
+            'kPrivateFileMaxBytes (${AirGridConstants.kPrivateFileMaxBytes}) '
+            'expands to ~${worstCaseContent.round()} bytes of packet '
+            'content, which exceeds kMaxPacketBytes '
+            '(${AirGridConstants.kMaxPacketBytes}). Lower the file cap or '
+            'raise the packet ceiling.',
+      );
+    });
   });
 }

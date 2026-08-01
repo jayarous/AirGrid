@@ -33,7 +33,7 @@ class LruCache<K> {
   bool contains(K key) {
     final ts = _map[key];
     if (ts == null) return false;
-    
+
     final now = _clock();
     if (now.difference(ts) > ttl) {
       // Mark as dirty but don't clean yet (lazy expiration)
@@ -52,12 +52,12 @@ class LruCache<K> {
     // Refresh existing entry — remove then reinsert at the back.
     _map.remove(key);
     _map[key] = _clock();
-    
+
     // Evict oldest if over capacity
     if (_map.length > maxSize) {
       _map.remove(_map.keys.first);
     }
-    
+
     // Lazy cleanup: prune if dirty count exceeds threshold
     final threshold = (maxSize / 4).ceil();
     if (_dirtyCount >= threshold) {

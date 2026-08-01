@@ -271,9 +271,9 @@ class AirGridMeshService {
 
   Future<void> _sendPacketFragments(
     AirGridPacket packet,
-    List<String> targets,
-    {void Function(double progress)? onProgress}
-  ) async {
+    List<String> targets, {
+    void Function(double progress)? onProgress,
+  }) async {
     final paced = _shouldPaceFragments(packet);
     final maxAttempts = paced ? 6 : 3;
 
@@ -416,7 +416,9 @@ class AirGridMeshService {
   /// handshake is required.
   Future<void> sendPublicAudio(AudioAttachmentPayload audio) async {
     if (!_outboundLimiter.allow()) {
-      throw StateError('Audio rate limited. Please wait before transmitting again.');
+      throw StateError(
+        'Audio rate limited. Please wait before transmitting again.',
+      );
     }
 
     final localNodeId = _identity.nodeId;
@@ -578,7 +580,10 @@ class AirGridMeshService {
         targets.add(peer.endpointId);
       }
       for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints(targets, TransportCodec.encode(outgoing));
+        await _transport.sendToEndpoints(
+          targets,
+          TransportCodec.encode(outgoing),
+        );
       }
 
       AirGridLogger.log(
@@ -962,13 +967,11 @@ class AirGridMeshService {
   /// Sends a private image to a known contact; supports relay/spool flow.
   Future<PrivateSendResult> sendPrivateImageToContact(
     KnownContact contact,
-    ImageAttachmentPayload image,
-    {
+    ImageAttachmentPayload image, {
     String? messageId,
     String? packetId,
     bool emitLocalMessage = true,
-  }
-  ) async {
+  }) async {
     if (_contactStore.isBlocked(contact.nodeId)) {
       return PrivateSendResult.blockedContact;
     }
@@ -1220,13 +1223,11 @@ class AirGridMeshService {
   /// Sends a private voice note to a known contact; supports relay/spool flow.
   Future<PrivateSendResult> sendPrivateAudioToContact(
     KnownContact contact,
-    AudioAttachmentPayload audio,
-    {
+    AudioAttachmentPayload audio, {
     String? messageId,
     String? packetId,
     bool emitLocalMessage = true,
-  }
-  ) async {
+  }) async {
     if (_contactStore.isBlocked(contact.nodeId)) {
       return PrivateSendResult.blockedContact;
     }
@@ -1420,11 +1421,7 @@ class AirGridMeshService {
       if (encrypted && !targets.contains(peer.endpointId)) {
         targets.add(peer.endpointId);
       }
-      await _sendPacketFragments(
-        packet,
-        targets,
-        onProgress: onProgress,
-      );
+      await _sendPacketFragments(packet, targets, onProgress: onProgress);
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -1482,14 +1479,12 @@ class AirGridMeshService {
 
   Future<PrivateSendResult> sendPrivateFileToContact(
     KnownContact contact,
-    FileAttachmentPayload file,
-    {
-      String? messageId,
-      String? packetId,
-      bool emitLocalMessage = true,
-      void Function(double progress)? onProgress,
-    }
-  ) async {
+    FileAttachmentPayload file, {
+    String? messageId,
+    String? packetId,
+    bool emitLocalMessage = true,
+    void Function(double progress)? onProgress,
+  }) async {
     if (_contactStore.isBlocked(contact.nodeId)) {
       return PrivateSendResult.blockedContact;
     }
@@ -1574,11 +1569,7 @@ class AirGridMeshService {
     }
 
     try {
-      await _sendPacketFragments(
-        packet,
-        targets,
-        onProgress: onProgress,
-      );
+      await _sendPacketFragments(packet, targets, onProgress: onProgress);
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -1686,7 +1677,9 @@ class AirGridMeshService {
     // Reassembled packets (fromAssembly=true) are synthetic: their underlying
     // fragments were already received, so double-counting them is wrong.
     final isFragment = packet.packetType == 'fragment';
-    if (!fromAssembly && !isFragment && !_inboundLimiters.allow(fromEndpointId)) {
+    if (!fromAssembly &&
+        !isFragment &&
+        !_inboundLimiters.allow(fromEndpointId)) {
       final retryAfter = _inboundLimiters.retryAfter(fromEndpointId);
       AirGridLogger.log(
         LogCategory.routing,
@@ -1740,10 +1733,10 @@ class AirGridMeshService {
         packet.packetType != 'fragment' &&
         packet.packetType != 'delivery_receipt' &&
         packet.packetType != 'read_receipt' &&
-      packet.packetType != 'location_update' &&
-      packet.packetType != 'image' &&
-      packet.packetType != 'audio' &&
-      packet.packetType != 'file') {
+        packet.packetType != 'location_update' &&
+        packet.packetType != 'image' &&
+        packet.packetType != 'audio' &&
+        packet.packetType != 'file') {
       final contentValidation = MessageContentValidator.validateRemote(
         packet.content,
       );
@@ -1788,10 +1781,10 @@ class AirGridMeshService {
     // -- Gate 3c: trusted-contacts-only mode --------------------------------
     // key_announce is always allowed so unknown nodes can be learned before
     // the user decides to trust them. Chat and location are gated.
-        if ((packet.packetType == 'chat' ||
-          packet.packetType == 'image' ||
-          packet.packetType == 'audio' ||
-          packet.packetType == 'file' ||
+    if ((packet.packetType == 'chat' ||
+            packet.packetType == 'image' ||
+            packet.packetType == 'audio' ||
+            packet.packetType == 'file' ||
             packet.packetType == 'location_update') &&
         !_shouldAcceptFromNode(packet.senderNodeId)) {
       AirGridLogger.log(
@@ -2557,7 +2550,8 @@ class AirGridMeshService {
         .toList();
     final targets = <String>[];
 
-    if (preferredEndpointId != null && connected.contains(preferredEndpointId)) {
+    if (preferredEndpointId != null &&
+        connected.contains(preferredEndpointId)) {
       targets.add(preferredEndpointId);
     }
     for (final id in mappedEndpoints) {

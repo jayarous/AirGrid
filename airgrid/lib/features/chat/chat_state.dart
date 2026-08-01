@@ -175,8 +175,8 @@ class ChatState {
   Set<String> get trustedNodeIds =>
       knownContacts.where((c) => c.isTrusted).map((c) => c.nodeId).toSet();
 
-    /// Node IDs of private chats the user closed locally.
-    Set<String> get closedChatNodeIds =>
+  /// Node IDs of private chats the user closed locally.
+  Set<String> get closedChatNodeIds =>
       knownContacts.where((c) => c.isChatClosed).map((c) => c.nodeId).toSet();
 
   ChatState copyWith({
@@ -272,8 +272,7 @@ class ChatState {
           : walkieInviteIsIncoming ?? this.walkieInviteIsIncoming,
       walkieSessionActivePeerNodeId: clearWalkieSessionActivePeerNodeId
           ? null
-          : walkieSessionActivePeerNodeId ??
-            this.walkieSessionActivePeerNodeId,
+          : walkieSessionActivePeerNodeId ?? this.walkieSessionActivePeerNodeId,
       hiddenMessageIds: hiddenMessageIds ?? this.hiddenMessageIds,
     );
   }

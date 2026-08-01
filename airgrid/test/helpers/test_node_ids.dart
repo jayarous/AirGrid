@@ -11,13 +11,13 @@ String testNodeId(String name) {
   // Use MD5 hash of the name to get 16 bytes
   final bytes = utf8.encode('test-node-$name');
   final hash = _md5(bytes);
-  
+
   // Set version bits (4 bits at byte 6) to 0100 for UUID v4
   hash[6] = (hash[6] & 0x0F) | 0x40;
-  
+
   // Set variant bits (2 bits at byte 8) to 10 for RFC 4122
   hash[8] = (hash[8] & 0x3F) | 0x80;
-  
+
   // Format as UUID string
   return '${_hex(hash, 0, 4)}-${_hex(hash, 4, 2)}-'
       '${_hex(hash, 6, 2)}-${_hex(hash, 8, 2)}-${_hex(hash, 10, 6)}';
@@ -37,19 +37,19 @@ List<int> _md5(List<int> data) {
   final padded = List<int>.filled(paddedLength, 0);
   padded.setRange(0, data.length, data);
   padded[data.length] = 0x80;
-  
+
   // Append original length in bits (little-endian)
   final bitLength = data.length * 8;
   for (var i = 0; i < 8; i++) {
     padded[paddedLength - 8 + i] = (bitLength >> (i * 8)) & 0xFF;
   }
-  
+
   // Initialize hash values
   var a = 0x67452301;
   var b = 0xEFCDAB89;
   var c = 0x98BADCFE;
   var d = 0x10325476;
-  
+
   // Process each 64-byte block
   for (var i = 0; i < paddedLength; i += 64) {
     final block = padded.sublist(i, i + 64);
@@ -59,9 +59,9 @@ List<int> _md5(List<int> data) {
           (block[j * 4 + 2] << 16) |
           (block[j * 4 + 3] << 24);
     });
-    
+
     var aa = a, bb = b, cc = c, dd = d;
-    
+
     // Round 1
     for (var j = 0; j < 16; j++) {
       final f = (bb & cc) | ((~bb) & dd);
@@ -71,7 +71,7 @@ List<int> _md5(List<int> data) {
       cc = bb;
       bb = bb + _rotateLeft(temp, _s[j]);
     }
-    
+
     // Round 2
     for (var j = 16; j < 32; j++) {
       final f = (bb & dd) | (cc & (~dd));
@@ -82,7 +82,7 @@ List<int> _md5(List<int> data) {
       cc = bb;
       bb = bb + _rotateLeft(temp, _s[j]);
     }
-    
+
     // Round 3
     for (var j = 32; j < 48; j++) {
       final f = bb ^ cc ^ dd;
@@ -93,7 +93,7 @@ List<int> _md5(List<int> data) {
       cc = bb;
       bb = bb + _rotateLeft(temp, _s[j]);
     }
-    
+
     // Round 4
     for (var j = 48; j < 64; j++) {
       final f = cc ^ (bb | (~dd));
@@ -104,13 +104,13 @@ List<int> _md5(List<int> data) {
       cc = bb;
       bb = bb + _rotateLeft(temp, _s[j]);
     }
-    
+
     a = (a + aa) & 0xFFFFFFFF;
     b = (b + bb) & 0xFFFFFFFF;
     c = (c + cc) & 0xFFFFFFFF;
     d = (d + dd) & 0xFFFFFFFF;
   }
-  
+
   // Convert to bytes (little-endian)
   final result = <int>[];
   for (final value in [a, b, c, d]) {
@@ -118,7 +118,7 @@ List<int> _md5(List<int> data) {
       result.add((value >> (i * 8)) & 0xFF);
     }
   }
-  
+
   return result;
 }
 
@@ -128,27 +128,135 @@ int _rotateLeft(int value, int shift) {
 
 // MD5 constants
 final _s = [
-  7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-  5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
-  4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-  6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+  7,
+  12,
+  17,
+  22,
+  7,
+  12,
+  17,
+  22,
+  7,
+  12,
+  17,
+  22,
+  7,
+  12,
+  17,
+  22,
+  5,
+  9,
+  14,
+  20,
+  5,
+  9,
+  14,
+  20,
+  5,
+  9,
+  14,
+  20,
+  5,
+  9,
+  14,
+  20,
+  4,
+  11,
+  16,
+  23,
+  4,
+  11,
+  16,
+  23,
+  4,
+  11,
+  16,
+  23,
+  4,
+  11,
+  16,
+  23,
+  6,
+  10,
+  15,
+  21,
+  6,
+  10,
+  15,
+  21,
+  6,
+  10,
+  15,
+  21,
+  6,
+  10,
+  15,
+  21,
 ];
 
 final _k = [
-  0xD76AA478, 0xE8C7B756, 0x242070DB, 0xC1BDCEEE,
-  0xF57C0FAF, 0x4787C62A, 0xA8304613, 0xFD469501,
-  0x698098D8, 0x8B44F7AF, 0xFFFF5BB1, 0x895CD7BE,
-  0x6B901122, 0xFD987193, 0xA679438E, 0x49B40821,
-  0xF61E2562, 0xC040B340, 0x265E5A51, 0xE9B6C7AA,
-  0xD62F105D, 0x02441453, 0xD8A1E681, 0xE7D3FBC8,
-  0x21E1CDE6, 0xC33707D6, 0xF4D50D87, 0x455A14ED,
-  0xA9E3E905, 0xFCEFA3F8, 0x676F02D9, 0x8D2A4C8A,
-  0xFFFA3942, 0x8771F681, 0x6D9D6122, 0xFDE5380C,
-  0xA4BEEA44, 0x4BDECFA9, 0xF6BB4B60, 0xBEBFBC70,
-  0x289B7EC6, 0xEAA127FA, 0xD4EF3085, 0x04881D05,
-  0xD9D4D039, 0xE6DB99E5, 0x1FA27CF8, 0xC4AC5665,
-  0xF4292244, 0x432AFF97, 0xAB9423A7, 0xFC93A039,
-  0x655B59C3, 0x8F0CCC92, 0xFFEFF47D, 0x85845DD1,
-  0x6FA87E4F, 0xFE2CE6E0, 0xA3014314, 0x4E0811A1,
-  0xF7537E82, 0xBD3AF235, 0x2AD7D2BB, 0xEB86D391,
+  0xD76AA478,
+  0xE8C7B756,
+  0x242070DB,
+  0xC1BDCEEE,
+  0xF57C0FAF,
+  0x4787C62A,
+  0xA8304613,
+  0xFD469501,
+  0x698098D8,
+  0x8B44F7AF,
+  0xFFFF5BB1,
+  0x895CD7BE,
+  0x6B901122,
+  0xFD987193,
+  0xA679438E,
+  0x49B40821,
+  0xF61E2562,
+  0xC040B340,
+  0x265E5A51,
+  0xE9B6C7AA,
+  0xD62F105D,
+  0x02441453,
+  0xD8A1E681,
+  0xE7D3FBC8,
+  0x21E1CDE6,
+  0xC33707D6,
+  0xF4D50D87,
+  0x455A14ED,
+  0xA9E3E905,
+  0xFCEFA3F8,
+  0x676F02D9,
+  0x8D2A4C8A,
+  0xFFFA3942,
+  0x8771F681,
+  0x6D9D6122,
+  0xFDE5380C,
+  0xA4BEEA44,
+  0x4BDECFA9,
+  0xF6BB4B60,
+  0xBEBFBC70,
+  0x289B7EC6,
+  0xEAA127FA,
+  0xD4EF3085,
+  0x04881D05,
+  0xD9D4D039,
+  0xE6DB99E5,
+  0x1FA27CF8,
+  0xC4AC5665,
+  0xF4292244,
+  0x432AFF97,
+  0xAB9423A7,
+  0xFC93A039,
+  0x655B59C3,
+  0x8F0CCC92,
+  0xFFEFF47D,
+  0x85845DD1,
+  0x6FA87E4F,
+  0xFE2CE6E0,
+  0xA3014314,
+  0x4E0811A1,
+  0xF7537E82,
+  0xBD3AF235,
+  0x2AD7D2BB,
+  0xEB86D391,
 ];

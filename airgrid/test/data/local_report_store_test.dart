@@ -51,18 +51,18 @@ void _contractTests(
 }
 
 void main() {
-  _contractTests('InMemoryLocalReportStore', () async => InMemoryLocalReportStore());
+  _contractTests(
+    'InMemoryLocalReportStore',
+    () async => InMemoryLocalReportStore(),
+  );
 
   group('SharedPrefsLocalReportStore', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
-    _contractTests(
-      'SharedPrefsLocalReportStore contract',
-      () async {
-        SharedPreferences.setMockInitialValues({});
-        return SharedPrefsLocalReportStore.create();
-      },
-    );
+    _contractTests('SharedPrefsLocalReportStore contract', () async {
+      SharedPreferences.setMockInitialValues({});
+      return SharedPrefsLocalReportStore.create();
+    });
 
     test('persists reports across re-instantiation', () async {
       final s1 = await SharedPrefsLocalReportStore.create();

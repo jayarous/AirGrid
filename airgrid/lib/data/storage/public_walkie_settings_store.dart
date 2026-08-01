@@ -18,7 +18,7 @@ class SharedPrefsPublicWalkieSettingsStore
   bool _cached;
 
   SharedPrefsPublicWalkieSettingsStore._(this._prefs)
-      : _cached = _prefs.getBool(_prefsKey) ?? false;
+    : _cached = _prefs.getBool(_prefsKey) ?? false;
 
   static Future<SharedPrefsPublicWalkieSettingsStore> create() async {
     final prefs = await SharedPreferences.getInstance();
@@ -42,7 +42,7 @@ class InMemoryPublicWalkieSettingsStore implements PublicWalkieSettingsStore {
   bool _enabled;
 
   InMemoryPublicWalkieSettingsStore({bool initialEnabled = false})
-      : _enabled = initialEnabled;
+    : _enabled = initialEnabled;
 
   @override
   Future<bool> getStayOnlineEnabled() async => _enabled;
