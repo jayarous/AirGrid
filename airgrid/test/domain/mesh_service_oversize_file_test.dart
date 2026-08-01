@@ -127,6 +127,37 @@ void main() {
       await sub.cancel();
     });
 
+    // The original bug existed independently in three copy-pasted send
+    // methods. All private sends now share one dispatch path, so oversize
+    // behaviour must be identical across payload kinds — that consistency is
+    // the point of the consolidation, so pin it.
+    test('image and audio fail the same way as file when oversize', () async {
+      final big = base64Encode(Uint8List(4800 * 1024));
+
+      final imageResult = await mesh.sendPrivateImage(
+        peer,
+        ImageAttachmentPayload(
+          transferId: 't-img',
+          mimeType: 'image/jpeg',
+          byteLength: 4800 * 1024,
+          dataBase64: big,
+        ),
+      );
+      final audioResult = await mesh.sendPrivateAudio(
+        peer,
+        AudioAttachmentPayload(
+          transferId: 't-aud',
+          mimeType: 'audio/m4a',
+          byteLength: 4800 * 1024,
+          dataBase64: big,
+        ),
+      );
+
+      expect(imageResult, PrivateSendResult.failed);
+      expect(audioResult, PrivateSendResult.failed);
+      expect(transport.sentPayloads, isEmpty);
+    });
+
     test('a small file still sends encrypted', () async {
       final file = _fileOfSize(64 * 1024);
 
