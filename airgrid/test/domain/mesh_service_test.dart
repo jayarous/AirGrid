@@ -502,7 +502,16 @@ void main() {
         expect(transport.sentPayloads, isNotEmpty);
 
         final sent = transport.sentPayloads.last;
-        expect(sent.endpoints, ['ep-target']);
+        // Encrypted private packets are broadcast to every connected endpoint
+        // for crowd relay — relays cannot read the content, and the extra
+        // paths raise the odds of delivery. Plaintext private packets are
+        // sent only to the target; that is covered by the sibling test
+        // 'sends only to target endpoint, not all peers'.
+        //
+        // NOTE: recipientNodeId travels in cleartext, so this broadcast
+        // exposes who is talking to whom to every peer in range, not just
+        // those on the relay path. Tracked as the metadata-minimisation item.
+        expect(sent.endpoints, containsAll(<String>['ep-target', 'ep-other']));
 
         final packet = TransportCodec.decode(sent.bytes)!;
         expect(packet.conversationType, 'private');

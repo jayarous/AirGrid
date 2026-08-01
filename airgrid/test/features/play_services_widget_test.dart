@@ -2,11 +2,13 @@ import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
+import 'package:airgrid/data/storage/chat_list_preferences_store.dart';
 import 'package:airgrid/data/storage/known_contact_store.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
 import 'package:airgrid/data/storage/message_repository.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
+import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
@@ -117,6 +119,12 @@ Future<void> _pumpWithProviders(
         privacySettingsStoreProvider.overrideWithValue(
           InMemoryPrivacySettingsStore(),
         ),
+        publicWalkieSettingsStoreProvider.overrideWithValue(
+          InMemoryPublicWalkieSettingsStore(),
+        ),
+        chatListPreferencesStoreProvider.overrideWithValue(
+          InMemoryChatListPreferencesStore(),
+        ),
         batterySettingsStoreProvider.overrideWithValue(
           InMemoryBatterySettingsStore(),
         ),
@@ -142,8 +150,8 @@ void main() {
     await _pumpWithProviders(tester, const HomeScreen(), unavailable);
 
     expect(find.text('Nearby is unavailable'), findsOneWidget);
-    expect(find.text('Mesh offline'), findsOneWidget);
-    expect(find.text('Mesh online'), findsNothing);
+    expect(find.text('Mesh Offline'), findsOneWidget);
+    expect(find.text('Mesh Online'), findsNothing);
     expect(find.text('Offline'), findsOneWidget);
     expect(find.text('Idle'), findsOneWidget);
     expect(find.text('Scanning for devices'), findsNothing);

@@ -257,14 +257,21 @@ class ChatController extends Notifier<ChatState> {
       ref.read(publicWalkieSettingsStoreProvider);
   BatterySettingsStore get _batteryStore =>
       ref.read(batterySettingsStoreProvider);
-    ChatListPreferencesStore get _chatListPrefs =>
+  ChatListPreferencesStore get _chatListPrefs =>
       ref.read(chatListPreferencesStoreProvider);
+
+  // These three run unawaited from [build]. Each `ref.read` after an `await`
+  // is a hazard: if the controller is disposed while the load is in flight,
+  // reading a provider from a disposed container throws. Resolve the store
+  // once up front, then guard the state write.
 
   Future<void> _loadBatteryOptimizationSetting() async {
     if (_batterySettingLoaded) return;
     _batterySettingLoaded = true;
-    final batteryOptimizationEnabled = await _batteryStore
+    final store = _batteryStore;
+    final batteryOptimizationEnabled = await store
         .getBatteryOptimizationEnabled();
+    if (_isDisposed) return;
     state = state.copyWith(
       batteryOptimizationEnabled: batteryOptimizationEnabled,
     );
@@ -273,14 +280,18 @@ class ChatController extends Notifier<ChatState> {
   Future<void> _loadPublicWalkieSetting() async {
     if (_publicWalkieSettingLoaded) return;
     _publicWalkieSettingLoaded = true;
-    final enabled = await _publicWalkieStore.getStayOnlineEnabled();
+    final store = _publicWalkieStore;
+    final enabled = await store.getStayOnlineEnabled();
+    if (_isDisposed) return;
     state = state.copyWith(publicWalkieStayOnline: enabled);
   }
 
   Future<void> _loadChatListPreferences() async {
-    final showOnlineOnly = await _chatListPrefs.getShowOnlineOnly();
-    final showClosedChats = await _chatListPrefs.getShowClosedChats();
-    final showFriendsOnly = await _chatListPrefs.getShowFriendsOnly();
+    final store = _chatListPrefs;
+    final showOnlineOnly = await store.getShowOnlineOnly();
+    final showClosedChats = await store.getShowClosedChats();
+    final showFriendsOnly = await store.getShowFriendsOnly();
+    if (_isDisposed) return;
     state = state.copyWith(
       showOnlineOnly: showOnlineOnly,
       showClosedChats: showClosedChats,

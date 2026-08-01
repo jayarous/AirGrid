@@ -23,7 +23,12 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Verify formatting
+      # Non-blocking for now: 43 of 96 files predate any formatting pass.
+      # Land a formatting-only commit (`dart format .`) and then drop
+      # continue-on-error so this gates. Do not fold that reformat into a
+      # substantive change — it would bury the real diff.
+      - name: Verify formatting (advisory)
+        continue-on-error: true
         run: dart format --output=none --set-exit-if-changed .
 
       - name: Analyze
