@@ -16,6 +16,9 @@ AirGrid currently supports:
 - public nearby mesh chat
 - direct private chat
 - opportunistic encrypted private messaging with X25519 key agreement
+- image, voice-note, and file attachments on private threads
+- push-to-talk walkie-talkie with invite/accept session control, plus a
+  public walkie mode
 - store-and-forward for encrypted private packets
 - SQLite message persistence
 - known-contact persistence
@@ -286,6 +289,38 @@ Fragment packets intentionally share the original packet's immutable
 `seenByNodes` list. Relay operations that modify `seenByNodes` must create a
 new list with a spread operation.
 
+## Attachment Encoding And Size Budget
+
+Attachments are base64-encoded **three times** before they reach the radio:
+
+1. raw bytes → base64 inside the JSON envelope (`media_attachment.dart`) — 4/3
+2. envelope → `CryptoService.encryptContent` → `base64(nonce‖ct‖mac)` — 4/3
+3. encoded packet → base64 per fragment chunk (`PacketFragmenter`) — 4/3
+
+Net wire expansion is roughly **2.4×**, and a file at the current cap produces
+on the order of 1,800 fragments.
+
+Because `PacketFragmenter.fragment` encodes the *whole* packet before
+splitting, an oversize attachment fails at `TransportCodec.encode`, not at send
+time. Attachment caps are therefore **derived from `kMaxPacketBytes`**, not
+chosen independently:
+
+```text
+raw_bytes × (4/3) + envelope_overhead + AEAD_overhead, × (4/3) < kMaxPacketBytes
+```
+
+`mesh_service_oversize_file_test.dart` asserts this invariant. If you raise an
+attachment cap, raise `kMaxPacketBytes` with it or the test will fail — which
+is the intent.
+
+A packet that cannot be encoded is a **permanent** failure. It raises
+`PacketTooLargeException`, is reported as `DeliveryStatus.failed`, and is never
+spooled: spooling an unencodable packet pins an entry that can never drain.
+
+Replacing this chain with native Nearby Connections `FILE`/`STREAM` payloads
+would remove all three base64 layers and the in-memory reassembly. That work is
+tracked under Future Work.
+
 ## Development Checks
 
 Before merging changes, run:
@@ -294,6 +329,11 @@ Before merging changes, run:
 flutter analyze
 flutter test
 ```
+
+CI runs `dart format`, `flutter analyze`, and `flutter test` on every push and
+pull request (`.github/workflows/ci.yml`). A second job fails the build if
+signing material (`*.jks`, `*.keystore`, `key.properties`) or device logs are
+ever tracked in git.
 
 The test suite covers routing, validation, crypto behavior, secure key
 migration, SQLite migrations, fragmentation, rate limiting, controller startup,
@@ -323,7 +363,13 @@ When changing mesh behavior, confirm:
 ## Future Work
 
 - richer private-thread UX
-- file transfer
+- native Nearby `FILE`/`STREAM` payloads for attachments, replacing the
+  base64 + fragment chain
+- key-fingerprint verification and trust-on-first-use key pinning
+- forward secrecy (current design is static-static X25519: one shared secret
+  per peer pair, for the lifetime of both identities)
+- metadata minimisation — `senderName` and `recipientNodeId` are currently
+  cleartext to relays on encrypted private packets
 - stronger long-term identity verification
 - broader type-safe ID migration
 - additional database indices when conversation-specific query patterns require

@@ -73,6 +73,27 @@ enum PrivateSendResult {
   failed,
 }
 
+/// Thrown when a packet cannot be serialised because it exceeds
+/// [AirGridConstants.kMaxPacketBytes].
+///
+/// This is a *permanent* failure, unlike a transport error: the same packet
+/// will fail identically on every retry. Callers must therefore never spool
+/// or retry a packet that raises this — doing so both misreports the send as
+/// successful and pins a packet in the spool that can never drain.
+class PacketTooLargeException implements Exception {
+  /// The ceiling that was exceeded.
+  final int limit;
+
+  /// The underlying codec error, kept for diagnostics.
+  final Object cause;
+
+  const PacketTooLargeException(this.limit, this.cause);
+
+  @override
+  String toString() =>
+      'PacketTooLargeException: packet exceeds $limit bytes ($cause).';
+}
+
 /// Core mesh routing engine for AirGrid.
 ///
 /// Responsibilities:
@@ -238,6 +259,16 @@ class AirGridMeshService {
         packet.packetType == 'file';
   }
 
+  /// Wraps a codec size error as a typed, non-retryable failure and logs it.
+  PacketTooLargeException _asPacketTooLarge(ArgumentError e) {
+    AirGridLogger.log(
+      LogCategory.routing,
+      'Packet rejected: exceeds kMaxPacketBytes '
+      '(${AirGridConstants.kMaxPacketBytes}). Not retryable, not spooled.',
+    );
+    return PacketTooLargeException(AirGridConstants.kMaxPacketBytes, e);
+  }
+
   Future<void> _sendPacketFragments(
     AirGridPacket packet,
     List<String> targets,
@@ -245,10 +276,26 @@ class AirGridMeshService {
   ) async {
     final paced = _shouldPaceFragments(packet);
     final maxAttempts = paced ? 6 : 3;
-    final fragments = PacketFragmenter.fragment(packet);
+
+    // Fragmentation encodes the whole packet first, so an oversize payload
+    // throws here rather than at send time. Translate it into a typed,
+    // explicitly non-retryable failure so callers do not mistake it for a
+    // transient transport error and spool it.
+    final List<AirGridPacket> fragments;
+    try {
+      fragments = PacketFragmenter.fragment(packet);
+    } on ArgumentError catch (e) {
+      throw _asPacketTooLarge(e);
+    }
+
     for (var index = 0; index < fragments.length; index++) {
       final outgoing = fragments[index];
-      final encoded = TransportCodec.encode(outgoing);
+      final Uint8List encoded;
+      try {
+        encoded = TransportCodec.encode(outgoing);
+      } on ArgumentError catch (e) {
+        throw _asPacketTooLarge(e);
+      }
       Object? lastError;
 
       for (var attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -732,7 +779,13 @@ class AirGridMeshService {
         : _transport.connectedEndpoints.toList();
 
     if (targets.isEmpty) {
-      _spoolPacket(packet);
+      if (!_spoolPacket(packet)) {
+        _statusController.add((
+          messageId: packet.messageId,
+          status: DeliveryStatus.failed,
+        ));
+        return PrivateSendResult.failed;
+      }
       _statusController.add((
         messageId: packet.messageId,
         status: DeliveryStatus.sent,
@@ -862,6 +915,15 @@ class AirGridMeshService {
       return encrypted
           ? PrivateSendResult.sentEncrypted
           : PrivateSendResult.sentPlaintext;
+    } on PacketTooLargeException {
+      // Permanent: the packet cannot be encoded at any time, so neither the
+      // relay fallback nor the spool can ever deliver it. Report the real
+      // failure instead of laundering it into a "sent" status.
+      _statusController.add((
+        messageId: messageId ?? packet.messageId,
+        status: DeliveryStatus.failed,
+      ));
+      return PrivateSendResult.failed;
     } catch (_) {
       if (encrypted) {
         final fallbackTargets = _transport.connectedEndpoints
@@ -979,7 +1041,13 @@ class AirGridMeshService {
         : _transport.connectedEndpoints.toList();
 
     if (targets.isEmpty) {
-      _spoolPacket(packet);
+      if (!_spoolPacket(packet)) {
+        _statusController.add((
+          messageId: messageId ?? packet.messageId,
+          status: DeliveryStatus.failed,
+        ));
+        return PrivateSendResult.failed;
+      }
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -1105,6 +1173,15 @@ class AirGridMeshService {
       return encrypted
           ? PrivateSendResult.sentEncrypted
           : PrivateSendResult.sentPlaintext;
+    } on PacketTooLargeException {
+      // Permanent: the packet cannot be encoded at any time, so neither the
+      // relay fallback nor the spool can ever deliver it. Report the real
+      // failure instead of laundering it into a "sent" status.
+      _statusController.add((
+        messageId: messageId ?? packet.messageId,
+        status: DeliveryStatus.failed,
+      ));
+      return PrivateSendResult.failed;
     } catch (_) {
       if (encrypted) {
         final fallbackTargets = _transport.connectedEndpoints
@@ -1223,7 +1300,13 @@ class AirGridMeshService {
         : _transport.connectedEndpoints.toList();
 
     if (targets.isEmpty) {
-      _spoolPacket(packet);
+      if (!_spoolPacket(packet)) {
+        _statusController.add((
+          messageId: messageId ?? packet.messageId,
+          status: DeliveryStatus.failed,
+        ));
+        return PrivateSendResult.failed;
+      }
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -1349,6 +1432,15 @@ class AirGridMeshService {
       return encrypted
           ? PrivateSendResult.sentEncrypted
           : PrivateSendResult.sentPlaintext;
+    } on PacketTooLargeException {
+      // Permanent: the packet cannot be encoded at any time, so neither the
+      // relay fallback nor the spool can ever deliver it. Report the real
+      // failure instead of laundering it into a "sent" status.
+      _statusController.add((
+        messageId: messageId ?? packet.messageId,
+        status: DeliveryStatus.failed,
+      ));
+      return PrivateSendResult.failed;
     } catch (_) {
       if (encrypted) {
         final fallbackTargets = _transport.connectedEndpoints
@@ -1467,7 +1559,13 @@ class AirGridMeshService {
         : _transport.connectedEndpoints.toList();
 
     if (targets.isEmpty) {
-      _spoolPacket(packet);
+      if (!_spoolPacket(packet)) {
+        _statusController.add((
+          messageId: messageId ?? packet.messageId,
+          status: DeliveryStatus.failed,
+        ));
+        return PrivateSendResult.failed;
+      }
       _statusController.add((
         messageId: messageId ?? packet.messageId,
         status: DeliveryStatus.sent,
@@ -2091,8 +2189,28 @@ class AirGridMeshService {
     String wireContent, {
     required bool isPrivate,
   }) async {
+    // Bound the decode before allocating, mirroring the photo and voice-note
+    // paths. Remote input is untrusted: reject, do not sanitise.
+    if (wireContent.length > AirGridConstants.kPrivateFileMaxWireBytes) {
+      AirGridLogger.log(
+        LogCategory.validation,
+        'File envelope rejected: ${wireContent.length} bytes exceeds '
+        'kPrivateFileMaxWireBytes',
+      );
+      return null;
+    }
+
     final payload = FileAttachmentPayload.fromWire(wireContent);
     if (payload == null) {
+      return null;
+    }
+
+    if (payload.byteLength > AirGridConstants.kPrivateFileMaxBytes) {
+      AirGridLogger.log(
+        LogCategory.validation,
+        'File rejected: ${payload.byteLength} bytes exceeds '
+        'kPrivateFileMaxBytes',
+      );
       return null;
     }
 
@@ -2350,9 +2468,25 @@ class AirGridMeshService {
   ///
   /// Enforces [AirGridConstants.kSpoolMaxEntries] capacity and prunes any
   /// expired entries before inserting.
-  void _spoolPacket(AirGridPacket packet) {
+  /// Returns true when the packet was accepted into the spool.
+  ///
+  /// Returns false for packets that can never be delivered — currently only
+  /// packets too large to encode. Callers that report delivery status must
+  /// not claim success when this returns false.
+  bool _spoolPacket(AirGridPacket packet) {
     final rid = packet.recipientNodeId!;
     final ttl = const Duration(seconds: AirGridConstants.kSpoolTtlSeconds);
+
+    // Backstop: never admit a packet the codec will reject. Spooling one
+    // guarantees a retry loop that can never drain, because every flush
+    // re-encodes and re-throws.
+    if (!_isEncodable(packet)) {
+      AirGridLogger.log(
+        LogCategory.routing,
+        '${packet.messageId} not spooled: exceeds kMaxPacketBytes',
+      );
+      return false;
+    }
 
     // Prune expired entries across all recipients before inserting.
     for (final entries in _spool.values) {
@@ -2368,7 +2502,7 @@ class AirGridMeshService {
         '${packet.messageId} dropped: spool at capacity '
         '(${AirGridConstants.kSpoolMaxEntries})',
       );
-      return;
+      return false;
     }
 
     _spool
@@ -2387,6 +2521,21 @@ class AirGridMeshService {
         .firstOrNull;
     if (endpointId != null) {
       unawaited(_flushSpool(rid, preferredEndpointId: endpointId));
+    }
+    return true;
+  }
+
+  /// Whether [packet] can be serialised within
+  /// [AirGridConstants.kMaxPacketBytes].
+  ///
+  /// Fragmentation encodes the whole packet before splitting, so an oversize
+  /// packet is undeliverable regardless of the fragment threshold.
+  bool _isEncodable(AirGridPacket packet) {
+    try {
+      TransportCodec.encode(packet);
+      return true;
+    } on ArgumentError {
+      return false;
     }
   }
 
