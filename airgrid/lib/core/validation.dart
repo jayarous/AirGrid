@@ -103,6 +103,30 @@ class DisplayNameValidator {
     return ValidationResult.ok(input);
   }
 
+  /// Like [validateRemote], but treats an **absent** name as valid.
+  ///
+  /// Phase 1 of metadata minimisation. `senderName` is cleartext on every
+  /// packet, including encrypted private ones, and those are broadcast to
+  /// every connected endpoint for crowd relay — so today every peer in range
+  /// learns who is talking to whom.
+  ///
+  /// Senders cannot simply stop including the name: [validateRemote] rejects
+  /// empty, so any node running a released build would drop such packets at
+  /// the validation gate and private messaging would break across versions.
+  /// The rollout is therefore staged:
+  ///
+  ///   Phase 1 (this) — receivers accept a missing name and fall back to the
+  ///                    known-contact record for display.
+  ///   Phase 2 (later, once phase 1 is widely deployed) — senders omit the
+  ///                    name on private packets.
+  ///
+  /// A non-empty name is still validated exactly as strictly as before: this
+  /// relaxes *absence*, not malformed input.
+  static ValidationResult validateRemoteOptional(String input) {
+    if (input.isEmpty) return const ValidationResult.ok('');
+    return validateRemote(input);
+  }
+
   /// Returns true if [s] contains control characters except normal whitespace.
   ///
   /// Allows: space (0x20), tab (0x09), but NOT newlines or other control chars.

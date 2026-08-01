@@ -786,6 +786,7 @@ class _NearbyPeerTile extends StatelessWidget {
                       profileIconId: contactProfile?.profileIconId,
                       profileStatus: contactProfile?.profileStatus,
                       isOnline: true,
+                      publicKeyBase64: contactProfile?.publicKeyBase64,
                     ),
                   );
                 },

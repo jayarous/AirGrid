@@ -415,6 +415,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                                 profileIconId: contact?.profileIconId,
                                 profileStatus: contact?.profileStatus,
                                 isOnline: true,
+                                publicKeyBase64: contact?.publicKeyBase64,
                               ),
                             );
                           },

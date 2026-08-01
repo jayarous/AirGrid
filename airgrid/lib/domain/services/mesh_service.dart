@@ -271,6 +271,24 @@ class AirGridMeshService {
         packet.packetType == 'file';
   }
 
+  /// Display name to show for the sender of [packet].
+  ///
+  /// Prefers the name on the wire, but tolerates its absence: senders will
+  /// stop including `senderName` on private packets once phase 1 receivers
+  /// are widely deployed (see [DisplayNameValidator.validateRemoteOptional]).
+  /// Falls back to the known-contact record learned from `key_announce`, then
+  /// to 'Unknown'.
+  String _displayNameFor(AirGridPacket packet) {
+    if (packet.senderName.isNotEmpty) return packet.senderName;
+    final contact = _contactStore.contacts.cast<KnownContact?>().firstWhere(
+      (c) => c?.nodeId == packet.senderNodeId,
+      orElse: () => null,
+    );
+    final known = contact?.displayName;
+    if (known != null && known.isNotEmpty) return known;
+    return 'Unknown';
+  }
+
   /// Wraps a codec size error as a typed, non-retryable failure and logs it.
   PacketTooLargeException _asPacketTooLarge(ArgumentError e) {
     AirGridLogger.log(
@@ -1746,7 +1764,10 @@ class AirGridMeshService {
     }
 
     // -- Gate 1b: Validate remote display name ---------------------------
-    final nameValidation = DisplayNameValidator.validateRemote(
+    // Optional, not lax: a malformed name is still rejected, but an absent
+    // one is accepted so senders can stop leaking it. See
+    // DisplayNameValidator.validateRemoteOptional for the rollout plan.
+    final nameValidation = DisplayNameValidator.validateRemoteOptional(
       packet.senderName,
     );
     if (!nameValidation.isValid) {
@@ -1930,7 +1951,7 @@ class AirGridMeshService {
               localNodeId,
               conversationType: packet.conversationType,
               peerNodeId: isPrivate ? packet.senderNodeId : null,
-              peerName: isPrivate ? packet.senderName : null,
+              peerName: isPrivate ? _displayNameFor(packet) : null,
             ),
           );
         }
@@ -1947,7 +1968,7 @@ class AirGridMeshService {
             localNodeId,
             conversationType: packet.conversationType,
             peerNodeId: isPrivate ? packet.senderNodeId : null,
-            peerName: isPrivate ? packet.senderName : null,
+            peerName: isPrivate ? _displayNameFor(packet) : null,
           ),
         );
         AirGridLogger.log(
@@ -1995,7 +2016,7 @@ class AirGridMeshService {
           localNodeId,
           conversationType: packet.conversationType,
           peerNodeId: isPrivate ? packet.senderNodeId : null,
-          peerName: isPrivate ? packet.senderName : null,
+          peerName: isPrivate ? _displayNameFor(packet) : null,
         ),
       );
     }
@@ -2147,7 +2168,7 @@ class AirGridMeshService {
       localNodeId,
       conversationType: packet.conversationType,
       peerNodeId: isPrivate ? packet.senderNodeId : null,
-      peerName: isPrivate ? packet.senderName : null,
+      peerName: isPrivate ? _displayNameFor(packet) : null,
       messageKind: 'image',
       mediaMimeType: payload.mimeType,
       mediaByteLength: payload.byteLength,
@@ -2197,7 +2218,7 @@ class AirGridMeshService {
       localNodeId,
       conversationType: packet.conversationType,
       peerNodeId: isPrivate ? packet.senderNodeId : null,
-      peerName: isPrivate ? packet.senderName : null,
+      peerName: isPrivate ? _displayNameFor(packet) : null,
       messageKind: 'audio',
       mediaMimeType: payload.mimeType,
       mediaByteLength: payload.byteLength,
@@ -2254,7 +2275,7 @@ class AirGridMeshService {
       localNodeId,
       conversationType: packet.conversationType,
       peerNodeId: isPrivate ? packet.senderNodeId : null,
-      peerName: isPrivate ? packet.senderName : null,
+      peerName: isPrivate ? _displayNameFor(packet) : null,
       messageKind: 'file',
       mediaMimeType: payload.mimeType,
       mediaByteLength: payload.byteLength,

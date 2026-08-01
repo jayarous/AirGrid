@@ -255,9 +255,28 @@ in radio range, not merely to relays along a path.
 Omitting `senderName` on private packets is **not** a drop-in change:
 `DisplayNameValidator.validateRemote` rejects an empty name, so any node
 running a released build would drop such packets at the validation gate and
-private messaging would silently break across versions. Fixing this needs a
-staged rollout — first ship receivers that tolerate an absent name, then, once
-those are widely deployed, ship senders that omit it.
+private messaging would silently break across versions. The rollout is
+therefore staged:
+
+- **Phase 1 — shipped.** Receivers accept a packet with no `senderName`
+  (`DisplayNameValidator.validateRemoteOptional`) and fall back to the
+  known-contact record for display. A *malformed* name is still rejected as
+  strictly as before; only absence is tolerated.
+- **Phase 2 — not yet.** Once phase 1 is widely deployed, senders stop putting
+  `senderName` on private packets. Do not ship this until phase-1 builds have
+  had time to reach the field, or private messages from new nodes will vanish
+  on older ones.
+
+`recipientNodeId` is a harder problem: routing needs it. Pseudonymous,
+rotating recipient tags are the standard answer and would be a wire-format
+version bump.
+
+### Verifying A Peer
+
+The peer profile sheet shows a **safety number** — the fingerprint of that
+peer's public key. Two people comparing it in person is the only way to know a
+key belongs to who they think it does. If it changes later, the peer either
+reinstalled or someone is impersonating them; the app cannot tell which.
 
 Do not log private keys, shared secrets, or plaintext private message contents.
 

@@ -1318,6 +1318,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     profileIconId: contact?.profileIconId,
                     profileStatus: contact?.profileStatus,
                     isOnline: isOnline,
+                    publicKeyBase64: contact?.publicKeyBase64,
                   ),
                 );
               } else if (value == 'close_chat') {
@@ -1838,6 +1839,7 @@ class _ConversationPicker extends ConsumerWidget {
                               profileIconId: thread.profileIconId,
                               profileStatus: thread.profileStatus,
                               isOnline: thread.isConnected,
+                              publicKeyBase64: thread.publicKeyBase64,
                             ),
                           );
                         }
@@ -1932,6 +1934,7 @@ List<_PrivateThreadTarget> _privateThreadsFrom(
       isTrusted: contact.isTrusted,
       profileIconId: contact.profileIconId,
       profileStatus: contact.profileStatus,
+      publicKeyBase64: contact.publicKeyBase64,
     );
   }
 
@@ -2007,6 +2010,7 @@ class _PrivateThreadTarget {
   final bool isTrusted;
   final String? profileIconId;
   final String? profileStatus;
+  final String? publicKeyBase64;
 
   const _PrivateThreadTarget({
     required this.peerNodeId,
@@ -2016,6 +2020,7 @@ class _PrivateThreadTarget {
     required this.isTrusted,
     this.profileIconId,
     this.profileStatus,
+    this.publicKeyBase64,
   });
 }
 
