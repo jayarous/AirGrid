@@ -9,6 +9,7 @@ import 'package:airgrid/domain/models/media_attachment.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -38,6 +39,7 @@ Future<LocalIdentityStore> _makeIdentity() async {
     'airgrid_node_id': _localNodeId,
     'airgrid_display_name': 'LocalUser',
   });
+  FlutterSecureStorage.setMockInitialValues({});
   return LocalIdentityStore.create();
 }
 
