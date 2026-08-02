@@ -200,6 +200,64 @@ void main() {
     expect(foreground.stopCount, 1);
   });
 
+  test(
+    'selectConversation keeps the walkie target while a session is live',
+    () async {
+      final transport = FakeTransport();
+      final container = _container(
+        identity: await _identity(),
+        transport: transport,
+      );
+      addTearDown(container.dispose);
+
+      final controller = container.read(chatControllerProvider.notifier);
+      await controller.startMesh();
+      transport.connectPeer(
+        'endpoint-1',
+        name: 'Alex',
+        nodeId: _privatePeerNodeId,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final peer = MeshPeer(
+        endpointId: 'endpoint-1',
+        displayName: 'Alex',
+        connectedAt: DateTime.now(),
+        nodeId: _privatePeerNodeId,
+        encryptionReady: false,
+      );
+
+      expect(await controller.sendWalkieInvite(peer), isTrue);
+      final sessionId = container
+          .read(chatControllerProvider)
+          .walkie
+          .inviteSessionId!;
+
+      _receiveWalkieControl(
+        transport,
+        fromEndpointId: 'endpoint-1',
+        senderNodeId: _privatePeerNodeId,
+        senderName: 'Alex',
+        recipientNodeId: _localNodeId,
+        action: 'accept',
+        sessionId: sessionId,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      var state = container.read(chatControllerProvider);
+      expect(state.walkie.sessionActivePeerNodeId, _privatePeerNodeId);
+
+      // Stepping over to the public channel must not wipe the target of a
+      // session that is still live - doing so made the walkie screen ask the
+      // user to pick a peer they had already invited and had accepted.
+      controller.selectConversation(const PublicConversation());
+
+      state = container.read(chatControllerProvider);
+      expect(state.walkie.sessionActivePeerNodeId, _privatePeerNodeId);
+      expect(state.walkie.peerNodeId, _privatePeerNodeId);
+    },
+  );
+
   test('sendWalkieInvite sets outgoing invite state', () async {
     final transport = FakeTransport();
     final container = _container(

@@ -172,7 +172,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     if (selected is PrivateConversation) {
       return selected.peerNodeId;
     }
-    return state.walkie.peerNodeId;
+    // Same precedence as _currentTarget: an accepted session outranks an empty
+    // latch, so incoming audio still matches after the target is cleared.
+    return state.walkie.peerNodeId ?? state.walkie.sessionActivePeerNodeId;
   }
 
   Future<void> _handleIncomingWalkieUpdates(
@@ -299,13 +301,38 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     }
 
     final peer = _peerByNodeId(state.walkie.peerNodeId);
-    if (peer == null || peer.nodeId == null) {
-      return null;
+    if (peer != null && peer.nodeId != null) {
+      return PrivateConversation(
+        peerNodeId: peer.nodeId!,
+        peerName: peer.displayName,
+      );
     }
+
+    // An accepted session is the authoritative answer to "who am I talking
+    // to", so fall back to it before giving up. The name is resolved from
+    // known contacts rather than the live peer list on purpose: Nearby re-keys
+    // endpoint ids on every reconnect, so the peer drops out of state.peers
+    // for a moment mid-session, and resolving through it would prompt for a
+    // target that was already chosen and accepted.
+    final activeNodeId = state.walkie.sessionActivePeerNodeId;
+    if (activeNodeId == null) return null;
     return PrivateConversation(
-      peerNodeId: peer.nodeId!,
-      peerName: peer.displayName,
+      peerNodeId: activeNodeId,
+      peerName: _displayNameForNode(activeNodeId),
     );
+  }
+
+  /// Best available human name for [nodeId], preferring the live peer entry
+  /// and falling back to the stored contact so it survives endpoint churn.
+  String _displayNameForNode(String nodeId) {
+    final peer = _peerByNodeId(nodeId);
+    if (peer != null) return peer.displayName;
+    final contact = ref
+        .read(chatControllerProvider)
+        .knownContacts
+        .cast<KnownContact?>()
+        .firstWhere((c) => c?.nodeId == nodeId, orElse: () => null);
+    return contact?.displayName ?? 'Unknown';
   }
 
   MeshPeer? _peerByNodeId(String? nodeId) {
@@ -883,9 +910,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         });
         return;
       }
-      final selectedState = ref.read(chatControllerProvider);
-      final conv = selectedState.selectedConversation;
-      if (conv is! PrivateConversation) {
+      // Resolve through _currentTarget rather than reading the selected
+      // conversation directly: accepting an invite establishes a session
+      // without ever setting selectedConversation, so the receiving side would
+      // otherwise be told to choose a target it had already accepted.
+      final conv = _currentTarget();
+      if (conv == null) {
         throw const _WalkieSendException('Choose a private target first');
       }
 
@@ -1695,6 +1725,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
   Widget _buildTargetCard({
     required bool isPublicMode,
+    required bool isRiderMode,
     required bool hasTarget,
     required String targetName,
     required bool isTargetOnline,
@@ -1703,6 +1734,18 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     required bool isSending,
     required VoidCallback onChooseTarget,
   }) {
+    // The heading, the tick beside the name and the button label all key off
+    // hasTarget. Before, the button read "Choose person" even with someone
+    // already selected, which left no way to tell a made choice from an
+    // outstanding one.
+    final heading = isPublicMode
+        ? 'Public channel'
+        : isRiderMode
+        ? (hasTarget ? 'Rider selected' : 'Choose a rider')
+        : (hasTarget ? 'Talking to' : 'Private target');
+    final chooseLabel = isRiderMode
+        ? (hasTarget ? 'Change rider' : 'Choose rider')
+        : (hasTarget ? 'Change person' : 'Choose person');
     final caption = isPublicMode
         ? 'Broadcast to nearby AirGrid users.'
         : hasTarget
@@ -1743,7 +1786,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             children: [
               Expanded(
                 child: Text(
-                  isPublicMode ? 'Public channel' : 'Private target',
+                  heading,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -1781,13 +1824,29 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             ],
           ),
           const SizedBox(height: 10),
-          Text(
-            caption,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              if (!isPublicMode && hasTarget) ...[
+                const Icon(
+                  Icons.check_circle,
+                  size: 18,
+                  color: Color(0xFF57D163),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Expanded(
+                child: Text(
+                  caption,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Text(
@@ -1811,7 +1870,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                       disabledBackgroundColor: const Color(0xFF232B36),
                       disabledForegroundColor: Colors.white38,
                     ),
-                    child: const Text('Choose person'),
+                    child: Text(chooseLabel),
                   ),
           ),
         ],
@@ -2154,9 +2213,14 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         : state.walkie.peerNodeId;
     final hasTarget = targetNodeId != null && targetNodeId.isNotEmpty;
     final targetPeer = hasTarget ? _peerByNodeId(targetNodeId) : null;
+    // Resolve through known contacts rather than falling back to the literal
+    // string 'Private target', which otherwise renders where a person's name
+    // belongs whenever the peer is momentarily absent from the peer list.
     final targetName = selected is PrivateConversation
         ? selected.peerName
-        : targetPeer?.displayName ?? 'Private target';
+        : targetNodeId != null && targetNodeId.isNotEmpty
+        ? _displayNameForNode(targetNodeId)
+        : 'Private target';
     final isTargetOnline =
         hasTarget && state.peers.any((p) => p.nodeId == targetNodeId);
     final isIncomingInvite = state.walkie.inviteIsIncoming;
@@ -2424,6 +2488,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                             const SizedBox(height: 14),
                             _buildTargetCard(
                               isPublicMode: _isPublicMode,
+                              isRiderMode: _isRiderMode,
                               hasTarget: hasTarget,
                               targetName: hasTarget
                                   ? targetName

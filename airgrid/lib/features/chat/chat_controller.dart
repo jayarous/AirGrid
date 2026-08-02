@@ -1335,9 +1335,16 @@ class ChatController extends Notifier<ChatState> {
       unawaited(_sendReadReceiptsFor(target.peerNodeId));
       return;
     }
+    // Moving to a non-private thread normally drops the latched walkie target,
+    // but never while a session is live. sessionActivePeerNodeId records an
+    // accepted invite, and the target has to survive a trip to the public
+    // channel - otherwise the walkie screen forgets who it is talking to and
+    // asks the user to pick a peer they already picked.
     state = state.copyWith(
       selectedConversation: target,
-      walkie: state.walkie.copyWith(clearPeerNodeId: true),
+      walkie: state.walkie.hasActiveSession
+          ? state.walkie
+          : state.walkie.copyWith(clearPeerNodeId: true),
     );
   }
 
