@@ -16,22 +16,25 @@ The package name is permanent once the app is published. Use
 
 ## Release Signing
 
-Release builds use `android/key.properties`, which points to the local upload
-keystore outside the Flutter project:
+Release builds use `android/key.properties`, which points to an upload keystore
+stored **outside the repository**. Keep the keystore in a private location such
+as `~/.android-keys/` (or the Windows equivalent) and point `storeFile` at it.
 
-```text
-C:/Users/jayar/Desktop/AirGrid/release-signing/airgrid-upload.jks
+Never commit `android/key.properties`, the keystore, or the upload key
+fingerprint. The repository root `.gitignore` blocks `*.jks`, `*.keystore`,
+`key.properties`, and `release-signing/`; do not weaken those rules.
+
+Back up the keystore and its passwords securely and separately. If either is
+lost, future Play uploads require an upload-key reset through Google Play
+Console.
+
+To read the upload key fingerprint locally when Play Console asks for it:
+
+```bash
+keytool -list -v -keystore <path-to-keystore> -alias <alias>
 ```
 
-Do not commit `android/key.properties` or the keystore. Back up both securely.
-If either is lost, future Play uploads may require upload-key reset through
-Google Play Console.
-
-Upload key SHA-256:
-
-```text
-18:D4:FB:DA:F2:B3:3C:B8:42:FD:38:5D:0F:8E:0D:4B:C9:05:53:34:A9:06:56:4E:BF:B0:58:18:6A:95:90:69
-```
+Do not paste the output into this file or any other tracked document.
 
 ## Build And Checks
 

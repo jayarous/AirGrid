@@ -1,11 +1,13 @@
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
+import 'package:airgrid/data/storage/chat_list_preferences_store.dart';
 import 'package:airgrid/data/storage/known_contact_store.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
 import 'package:airgrid/data/storage/message_repository.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
+import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
@@ -53,12 +55,10 @@ Future<LocalIdentityStore> _identity() async {
 }
 
 Future<void> _pumpWalkie(
-  WidgetTester tester,
-  {
-    FakeTransport? transport,
-    FakeForegroundService? foreground,
-  }
-) async {
+  WidgetTester tester, {
+  FakeTransport? transport,
+  FakeForegroundService? foreground,
+}) async {
   final fg = foreground ?? FakeForegroundService();
   final tx = transport ?? FakeTransport();
   addTearDown(fg.dispose);
@@ -74,10 +74,18 @@ Future<void> _pumpWalkie(
         ),
         foregroundServiceProvider.overrideWithValue(fg),
         cryptoServiceProvider.overrideWithValue(CryptoService()),
-        knownContactStoreProvider.overrideWithValue(InMemoryKnownContactStore()),
+        knownContactStoreProvider.overrideWithValue(
+          InMemoryKnownContactStore(),
+        ),
         localReportStoreProvider.overrideWithValue(InMemoryLocalReportStore()),
         privacySettingsStoreProvider.overrideWithValue(
           InMemoryPrivacySettingsStore(),
+        ),
+        publicWalkieSettingsStoreProvider.overrideWithValue(
+          InMemoryPublicWalkieSettingsStore(),
+        ),
+        chatListPreferencesStoreProvider.overrideWithValue(
+          InMemoryChatListPreferencesStore(),
         ),
         batterySettingsStoreProvider.overrideWithValue(
           InMemoryBatterySettingsStore(),
@@ -90,26 +98,31 @@ Future<void> _pumpWalkie(
 }
 
 void main() {
-  testWidgets('shows no-target presence state by default', (tester) async {
+  // The walkie screen presents state as a radio channel readout, not as
+  // prose labels. The call sign is `CH-<TARGET>` uppercased, and the channel
+  // strip shows `Channel NN: <peer>` for peers currently connected.
+
+  testWidgets('shows no-target channel readout by default', (tester) async {
     await _pumpWalkie(tester);
 
-    expect(find.text('No target selected'), findsOneWidget);
+    expect(find.text('CH-NO TARGET'), findsOneWidget);
   });
 
-  testWidgets('shows selected private target name', (tester) async {
+  testWidgets('shows selected private target in the call sign', (tester) async {
     await _pumpWalkie(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).selectConversation(
-      const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
-    );
+    container
+        .read(chatControllerProvider.notifier)
+        .selectConversation(
+          const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
+        );
     await tester.pumpAndSettle();
 
-    expect(find.text('Alex'), findsOneWidget);
-    expect(find.text('Target offline'), findsOneWidget);
+    expect(find.text('CH-ALEX'), findsOneWidget);
   });
 
   testWidgets('shows target online when selected peer is connected', (
@@ -117,11 +130,7 @@ void main() {
   ) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    await _pumpWalkie(
-      tester,
-      transport: transport,
-      foreground: foreground,
-    );
+    await _pumpWalkie(tester, transport: transport, foreground: foreground);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
@@ -135,19 +144,23 @@ void main() {
     transport.connectPeer('endpoint-1', name: 'Alex', nodeId: 'peer-1');
     await tester.pumpAndSettle();
 
-    expect(find.text('Target online'), findsOneWidget);
+    // A connected peer earns a numbered channel entry; an offline target
+    // falls back to the generic 'Paired private session' description.
+    expect(find.text('Channel 01: Alex'), findsOneWidget);
   });
 
-  testWidgets('renders walkie last error from controller state', (tester) async {
+  testWidgets('renders walkie last error from controller state', (
+    tester,
+  ) async {
     await _pumpWalkie(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).setWalkieLastError(
-      'Peer is not online',
-    );
+    container
+        .read(chatControllerProvider.notifier)
+        .setWalkieLastError('Peer is not online');
     await tester.pumpAndSettle();
 
     expect(find.text('Peer is not online'), findsOneWidget);
@@ -162,10 +175,12 @@ void main() {
       tester.element(find.byType(WalkieScreen)),
     );
 
-    container.read(chatControllerProvider.notifier).setWalkieSending(
-      isSending: true,
-    );
-    await tester.pumpAndSettle();
+    container
+        .read(chatControllerProvider.notifier)
+        .setWalkieSending(isSending: true);
+    // Not pumpAndSettle: sending starts the speaker pulse, a repeating
+    // animation that never settles, so pumpAndSettle would time out.
+    await tester.pump();
 
     final iconButtonFinder = find.ancestor(
       of: find.byIcon(Icons.people_alt_outlined),
@@ -189,11 +204,7 @@ void main() {
   testWidgets('invite action is shown for an online peer', (tester) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    await _pumpWalkie(
-      tester,
-      transport: transport,
-      foreground: foreground,
-    );
+    await _pumpWalkie(tester, transport: transport, foreground: foreground);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),

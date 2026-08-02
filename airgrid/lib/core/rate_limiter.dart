@@ -28,9 +28,9 @@ class RateLimiter {
     required this.burstCapacity,
     required this.tokensPerSecond,
     DateTime Function()? clock,
-  })  : _tokens = burstCapacity.toDouble(),
-        _lastRefill = (clock ?? DateTime.now)(),
-        _clock = clock ?? DateTime.now;
+  }) : _tokens = burstCapacity.toDouble(),
+       _lastRefill = (clock ?? DateTime.now)(),
+       _clock = clock ?? DateTime.now;
 
   /// Returns the last time tokens were refilled or consumed.
   DateTime get lastActivity => _lastRefill;

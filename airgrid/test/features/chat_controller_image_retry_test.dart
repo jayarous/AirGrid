@@ -3,14 +3,16 @@ import 'dart:convert';
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
+import 'package:airgrid/data/storage/chat_list_preferences_store.dart';
 import 'package:airgrid/data/storage/known_contact_store.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
 import 'package:airgrid/data/storage/message_repository.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
+import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
 import 'package:airgrid/data/transport/transport_codec.dart';
-import 'package:airgrid/domain/models/airgrid_packet.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
+import 'package:airgrid/domain/models/airgrid_packet.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
@@ -74,11 +76,8 @@ Future<CryptoService> _loadedCrypto(LocalIdentityStore identity) async {
   return crypto;
 }
 
-Future<({
-  CryptoService local,
-  CryptoService remote,
-  String remotePublicKey,
-})> _makeReceiptCrypto(LocalIdentityStore identity, String remoteNodeId) async {
+Future<({CryptoService local, CryptoService remote, String remotePublicKey})>
+_makeReceiptCrypto(LocalIdentityStore identity, String remoteNodeId) async {
   final algorithm = X25519();
   final remoteKeyPair = await algorithm.newKeyPair();
   final remotePublic = await remoteKeyPair.extractPublicKey();
@@ -160,6 +159,12 @@ ProviderContainer _container({
       privacySettingsStoreProvider.overrideWithValue(
         InMemoryPrivacySettingsStore(),
       ),
+      publicWalkieSettingsStoreProvider.overrideWithValue(
+        InMemoryPublicWalkieSettingsStore(),
+      ),
+      chatListPreferencesStoreProvider.overrideWithValue(
+        InMemoryChatListPreferencesStore(),
+      ),
       batterySettingsStoreProvider.overrideWithValue(
         InMemoryBatterySettingsStore(),
       ),
@@ -174,9 +179,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     FlutterSecureStorage.setMockInitialValues({});
     ChatController.automaticImageAckTimeout = const Duration(milliseconds: 20);
-    ChatController.automaticImageRetryBackoff = const Duration(
-      milliseconds: 5,
-    );
+    ChatController.automaticImageRetryBackoff = const Duration(milliseconds: 5);
     ChatController.automaticImageRetryStartupGrace = const Duration(minutes: 5);
     ChatController.automaticImageRetryMaxAttempts = 2;
     ChatController.imageRetryPeerOnlineTimeout = const Duration(
@@ -202,7 +205,9 @@ void main() {
   tearDown(() {
     ChatController.automaticImageAckTimeout = const Duration(seconds: 12);
     ChatController.automaticImageRetryBackoff = const Duration(seconds: 4);
-    ChatController.automaticImageRetryStartupGrace = const Duration(minutes: 10);
+    ChatController.automaticImageRetryStartupGrace = const Duration(
+      minutes: 10,
+    );
     ChatController.automaticImageRetryMaxAttempts = 2;
     ChatController.imageRetryPeerOnlineTimeout = const Duration(seconds: 10);
     ChatController.imageRetryPeerOnlinePollInterval = const Duration(
@@ -218,151 +223,160 @@ void main() {
     );
   });
 
-  test('startMesh restores recent outgoing image sends into automatic retry', () async {
-    final identity = await _identity();
-    final crypto = await _loadedCrypto(identity);
-    final transport = FakeTransport()..connectPeer('ep-1');
-    final repository = _RecordingMessageRepository(
-      history: [
-        _localImageMessage(
-          id: 'img-restore',
-          peerNodeId: 'peer-1',
-          timestamp: DateTime.now(),
+  test(
+    'startMesh restores recent outgoing image sends into automatic retry',
+    () async {
+      final identity = await _identity();
+      final crypto = await _loadedCrypto(identity);
+      final transport = FakeTransport()..connectPeer('ep-1');
+      final repository = _RecordingMessageRepository(
+        history: [
+          _localImageMessage(
+            id: 'img-restore',
+            peerNodeId: 'peer-1',
+            timestamp: DateTime.now(),
+          ),
+        ],
+      );
+      final container = _container(
+        transport: transport,
+        identity: identity,
+        crypto: crypto,
+        repository: repository,
+      );
+      addTearDown(container.dispose);
+
+      final notifier = container.read(chatControllerProvider.notifier);
+      await notifier.startMesh();
+      // ignore: invalid_use_of_protected_member
+      notifier.state = notifier.state.copyWith(
+        knownContacts: [_directContact('peer-1', identity.publicKeyBase64!)],
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(transport.sentPayloads, isNotEmpty);
+      expect(
+        container.read(chatControllerProvider).messages.single.deliveryStatus,
+        isNot(DeliveryStatus.failed),
+      );
+
+      await notifier.stopMesh();
+    },
+  );
+
+  test(
+    'automatic image retry marks failed only after retry budget is exhausted',
+    () async {
+      final identity = await _identity();
+      final transport = FakeTransport();
+      final repository = _RecordingMessageRepository(
+        history: [
+          _localImageMessage(
+            id: 'img-fail',
+            peerNodeId: 'peer-1',
+            timestamp: DateTime.now(),
+          ),
+        ],
+      );
+      final container = _container(
+        transport: transport,
+        identity: identity,
+        crypto: CryptoService(),
+        repository: repository,
+      );
+      addTearDown(container.dispose);
+
+      final notifier = container.read(chatControllerProvider.notifier);
+      await notifier.startMesh();
+      // ignore: invalid_use_of_protected_member
+      notifier.state = notifier.state.copyWith(
+        knownContacts: [_directContact('peer-1', identity.publicKeyBase64!)],
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 35));
+      expect(
+        container.read(chatControllerProvider).messages.single.deliveryStatus,
+        isNot(DeliveryStatus.failed),
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(
+        container.read(chatControllerProvider).messages.single.deliveryStatus,
+        DeliveryStatus.failed,
+      );
+      expect(
+        repository.updatedStatuses.where(
+          (entry) => entry.$2 == DeliveryStatus.failed,
         ),
-      ],
-    );
-    final container = _container(
-      transport: transport,
-      identity: identity,
-      crypto: crypto,
-      repository: repository,
-    );
-    addTearDown(container.dispose);
+        hasLength(1),
+      );
 
-    final notifier = container.read(chatControllerProvider.notifier);
-    await notifier.startMesh();
-    // ignore: invalid_use_of_protected_member
-    notifier.state = notifier.state.copyWith(
-      knownContacts: [_directContact('peer-1', identity.publicKeyBase64!)],
-    );
+      await notifier.stopMesh();
+    },
+  );
 
-    await Future<void>.delayed(const Duration(milliseconds: 80));
+  test(
+    'delivery receipt cancels automatic image retry before resend fires',
+    () async {
+      final identity = await _identity();
+      final receiptCrypto = await _makeReceiptCrypto(identity, remoteNodeId);
+      final transport = FakeTransport()..connectPeer('ep-1');
+      final repository = _RecordingMessageRepository(
+        history: [
+          _localImageMessage(
+            id: 'img-delivered',
+            peerNodeId: remoteNodeId,
+            timestamp: DateTime.now(),
+          ),
+        ],
+      );
+      final container = _container(
+        transport: transport,
+        identity: identity,
+        crypto: receiptCrypto.local,
+        repository: repository,
+      );
+      addTearDown(container.dispose);
 
-    expect(transport.sentPayloads, isNotEmpty);
-    expect(
-      container.read(chatControllerProvider).messages.single.deliveryStatus,
-      isNot(DeliveryStatus.failed),
-    );
+      final notifier = container.read(chatControllerProvider.notifier);
+      await notifier.startMesh();
+      // ignore: invalid_use_of_protected_member
+      notifier.state = notifier.state.copyWith(
+        knownContacts: [
+          _directContact(remoteNodeId, receiptCrypto.remotePublicKey),
+        ],
+      );
 
-    await notifier.stopMesh();
-  });
+      final baselinePayloads = transport.sentPayloads.length;
+      final encryptedReceiptMessageId = await receiptCrypto.remote
+          .encryptContent('img-delivered', identity.nodeId);
+      final receipt = AirGridPacket(
+        messageId: 'receipt-img-delivered',
+        senderNodeId: remoteNodeId,
+        senderName: 'peer-1',
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        content: encryptedReceiptMessageId!,
+        seenByNodes: const ['peer-1'],
+        hopLimit: 8,
+        packetType: 'delivery_receipt',
+        senderPublicKey: receiptCrypto.remotePublicKey,
+        encryptionVersion: 1,
+        conversationType: 'private',
+        recipientNodeId: identity.nodeId,
+      );
 
-  test('automatic image retry marks failed only after retry budget is exhausted', () async {
-    final identity = await _identity();
-    final transport = FakeTransport();
-    final repository = _RecordingMessageRepository(
-      history: [
-        _localImageMessage(
-          id: 'img-fail',
-          peerNodeId: 'peer-1',
-          timestamp: DateTime.now(),
-        ),
-      ],
-    );
-    final container = _container(
-      transport: transport,
-      identity: identity,
-      crypto: CryptoService(),
-      repository: repository,
-    );
-    addTearDown(container.dispose);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      transport.receiveBytes('ep-1', TransportCodec.encode(receipt));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
-    final notifier = container.read(chatControllerProvider.notifier);
-    await notifier.startMesh();
-    // ignore: invalid_use_of_protected_member
-    notifier.state = notifier.state.copyWith(
-      knownContacts: [_directContact('peer-1', identity.publicKeyBase64!)],
-    );
+      expect(
+        container.read(chatControllerProvider).messages.single.deliveryStatus,
+        DeliveryStatus.delivered,
+      );
+      expect(transport.sentPayloads.length, baselinePayloads);
 
-    await Future<void>.delayed(const Duration(milliseconds: 35));
-    expect(
-      container.read(chatControllerProvider).messages.single.deliveryStatus,
-      isNot(DeliveryStatus.failed),
-    );
-
-    await Future<void>.delayed(const Duration(milliseconds: 80));
-    expect(
-      container.read(chatControllerProvider).messages.single.deliveryStatus,
-      DeliveryStatus.failed,
-    );
-    expect(
-      repository.updatedStatuses.where((entry) => entry.$2 == DeliveryStatus.failed),
-      hasLength(1),
-    );
-
-    await notifier.stopMesh();
-  });
-
-  test('delivery receipt cancels automatic image retry before resend fires', () async {
-    final identity = await _identity();
-    final receiptCrypto = await _makeReceiptCrypto(identity, remoteNodeId);
-    final transport = FakeTransport()..connectPeer('ep-1');
-    final repository = _RecordingMessageRepository(
-      history: [
-        _localImageMessage(
-          id: 'img-delivered',
-          peerNodeId: remoteNodeId,
-          timestamp: DateTime.now(),
-        ),
-      ],
-    );
-    final container = _container(
-      transport: transport,
-      identity: identity,
-      crypto: receiptCrypto.local,
-      repository: repository,
-    );
-    addTearDown(container.dispose);
-
-    final notifier = container.read(chatControllerProvider.notifier);
-    await notifier.startMesh();
-    // ignore: invalid_use_of_protected_member
-    notifier.state = notifier.state.copyWith(
-      knownContacts: [
-        _directContact(remoteNodeId, receiptCrypto.remotePublicKey),
-      ],
-    );
-
-    final baselinePayloads = transport.sentPayloads.length;
-    final encryptedReceiptMessageId = await receiptCrypto.remote.encryptContent(
-      'img-delivered',
-      identity.nodeId,
-    );
-    final receipt = AirGridPacket(
-      messageId: 'receipt-img-delivered',
-      senderNodeId: remoteNodeId,
-      senderName: 'peer-1',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: encryptedReceiptMessageId!,
-      seenByNodes: const ['peer-1'],
-      hopLimit: 8,
-      packetType: 'delivery_receipt',
-      senderPublicKey: receiptCrypto.remotePublicKey,
-      encryptionVersion: 1,
-      conversationType: 'private',
-      recipientNodeId: identity.nodeId,
-    );
-
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-    transport.receiveBytes('ep-1', TransportCodec.encode(receipt));
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-
-    expect(
-      container.read(chatControllerProvider).messages.single.deliveryStatus,
-      DeliveryStatus.delivered,
-    );
-    expect(transport.sentPayloads.length, baselinePayloads);
-
-    await notifier.stopMesh();
-  });
+      await notifier.stopMesh();
+    },
+  );
 }

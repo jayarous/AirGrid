@@ -16,6 +16,9 @@ AirGrid currently supports:
 - public nearby mesh chat
 - direct private chat
 - opportunistic encrypted private messaging with X25519 key agreement
+- image, voice-note, and file attachments on private threads
+- push-to-talk walkie-talkie with invite/accept session control, plus a
+  public walkie mode
 - store-and-forward for encrypted private packets
 - SQLite message persistence
 - known-contact persistence
@@ -221,6 +224,60 @@ This protects private message contents from casual relay observers, but it is
 not a full authenticated identity system. Stronger long-term identity
 verification is future work.
 
+### Key Fingerprints And Key-Change Detection
+
+A node ID is **not** cryptographically bound to its public key. Any peer can
+announce any node ID with its own key, so a familiar name in the peer list is
+not proof of who is behind it.
+
+Two mitigations exist today:
+
+- `CryptoService.fingerprint` renders a 64-bit SHA-256 fingerprint of a public
+  key as four groups of four hex characters. Two users comparing that string
+  out-of-band is the only way to confirm a key really belongs to the person
+  they think it does — the mesh learns keys over the mesh and cannot vouch for
+  them.
+- `AirGridMeshService.keyChangeStream` emits whenever a known node ID announces
+  a key different from the one previously pinned for it.
+
+A key change is **accepted, not blocked**. A reinstall generates a fresh
+identity key, so blocking would break a common, legitimate case; the service
+cannot tell a reinstall from an impersonation attempt, so it defers to the
+user. Surfacing these events in the UI is still to do.
+
+### Known Gap: Cleartext Metadata On Private Packets
+
+`senderName` and `recipientNodeId` travel in cleartext on encrypted private
+packets. Encrypted private packets are also broadcast to *every* connected
+endpoint for crowd relay, so this exposes who is talking to whom to every peer
+in radio range, not merely to relays along a path.
+
+Omitting `senderName` on private packets is **not** a drop-in change:
+`DisplayNameValidator.validateRemote` rejects an empty name, so any node
+running a released build would drop such packets at the validation gate and
+private messaging would silently break across versions. The rollout is
+therefore staged:
+
+- **Phase 1 — shipped.** Receivers accept a packet with no `senderName`
+  (`DisplayNameValidator.validateRemoteOptional`) and fall back to the
+  known-contact record for display. A *malformed* name is still rejected as
+  strictly as before; only absence is tolerated.
+- **Phase 2 — not yet.** Once phase 1 is widely deployed, senders stop putting
+  `senderName` on private packets. Do not ship this until phase-1 builds have
+  had time to reach the field, or private messages from new nodes will vanish
+  on older ones.
+
+`recipientNodeId` is a harder problem: routing needs it. Pseudonymous,
+rotating recipient tags are the standard answer and would be a wire-format
+version bump.
+
+### Verifying A Peer
+
+The peer profile sheet shows a **safety number** — the fingerprint of that
+peer's public key. Two people comparing it in person is the only way to know a
+key belongs to who they think it does. If it changes later, the peer either
+reinstalled or someone is impersonating them; the app cannot tell which.
+
 Do not log private keys, shared secrets, or plaintext private message contents.
 
 ## Routing Rules
@@ -234,6 +291,21 @@ Important mesh invariants:
 - Relay sends exclude the source endpoint.
 - Relay jitter is decided by `RelayController`.
 - Fragment chunks are deduplicated separately from assembled packets.
+
+Relay eligibility follows two rules, pinned by `relay_eligibility_test.dart`:
+
+- Public traffic relays — `chat`, `image`, `audio`, `key_announce`,
+  `location_update`.
+- Private traffic relays **only** when encrypted, because a relay must never
+  be able to read what it forwards. Plaintext private packets are dropped.
+
+Public walkie audio (`packetType: 'audio'`) relays mesh-wide, matching public
+text and images. Clips are bounded by `kWalkieMaxBytes` (96 KiB), and that
+bound is currently the only real brake: an 8-hop flood of a 96 KiB clip is far
+more traffic than a text packet, and the inbound rate limiter counts *packets*,
+not bytes, so it does not throttle media proportionally. Byte-aware rate
+limiting is the natural follow-up if public walkie sees heavy use in a crowded
+mesh.
 
 Private routing:
 
@@ -286,6 +358,38 @@ Fragment packets intentionally share the original packet's immutable
 `seenByNodes` list. Relay operations that modify `seenByNodes` must create a
 new list with a spread operation.
 
+## Attachment Encoding And Size Budget
+
+Attachments are base64-encoded **three times** before they reach the radio:
+
+1. raw bytes → base64 inside the JSON envelope (`media_attachment.dart`) — 4/3
+2. envelope → `CryptoService.encryptContent` → `base64(nonce‖ct‖mac)` — 4/3
+3. encoded packet → base64 per fragment chunk (`PacketFragmenter`) — 4/3
+
+Net wire expansion is roughly **2.4×**, and a file at the current cap produces
+on the order of 1,800 fragments.
+
+Because `PacketFragmenter.fragment` encodes the *whole* packet before
+splitting, an oversize attachment fails at `TransportCodec.encode`, not at send
+time. Attachment caps are therefore **derived from `kMaxPacketBytes`**, not
+chosen independently:
+
+```text
+raw_bytes × (4/3) + envelope_overhead + AEAD_overhead, × (4/3) < kMaxPacketBytes
+```
+
+`mesh_service_oversize_file_test.dart` asserts this invariant. If you raise an
+attachment cap, raise `kMaxPacketBytes` with it or the test will fail — which
+is the intent.
+
+A packet that cannot be encoded is a **permanent** failure. It raises
+`PacketTooLargeException`, is reported as `DeliveryStatus.failed`, and is never
+spooled: spooling an unencodable packet pins an entry that can never drain.
+
+Replacing this chain with native Nearby Connections `FILE`/`STREAM` payloads
+would remove all three base64 layers and the in-memory reassembly. That work is
+tracked under Future Work.
+
 ## Development Checks
 
 Before merging changes, run:
@@ -294,6 +398,11 @@ Before merging changes, run:
 flutter analyze
 flutter test
 ```
+
+CI runs `dart format`, `flutter analyze`, and `flutter test` on every push and
+pull request (`.github/workflows/ci.yml`). A second job fails the build if
+signing material (`*.jks`, `*.keystore`, `key.properties`) or device logs are
+ever tracked in git.
 
 The test suite covers routing, validation, crypto behavior, secure key
 migration, SQLite migrations, fragmentation, rate limiting, controller startup,
@@ -323,7 +432,13 @@ When changing mesh behavior, confirm:
 ## Future Work
 
 - richer private-thread UX
-- file transfer
+- native Nearby `FILE`/`STREAM` payloads for attachments, replacing the
+  base64 + fragment chain
+- key-fingerprint verification and trust-on-first-use key pinning
+- forward secrecy (current design is static-static X25519: one shared secret
+  per peer pair, for the lifetime of both identities)
+- metadata minimisation — `senderName` and `recipientNodeId` are currently
+  cleartext to relays on encrypted private packets
 - stronger long-term identity verification
 - broader type-safe ID migration
 - additional database indices when conversation-specific query patterns require

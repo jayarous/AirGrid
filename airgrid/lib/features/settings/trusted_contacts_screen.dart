@@ -49,20 +49,21 @@ class TrustedContactsScreen extends ConsumerWidget {
           : ListView.separated(
               padding: const EdgeInsets.symmetric(vertical: 8),
               itemCount: trustedContacts.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
+              separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, index) {
                 final contact = trustedContacts[index];
                 final nodeSnippet = contact.nodeId.length > 12
                     ? '${contact.nodeId.substring(0, 12)}…'
                     : contact.nodeId;
                 return ListTile(
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.verified),
-                  ),
+                  leading: const CircleAvatar(child: Icon(Icons.verified)),
                   title: Text(contact.displayName),
                   subtitle: Text(
                     nodeSnippet,
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
                   ),
                   isThreeLine: true,
                   trailing: SizedBox(
@@ -77,7 +78,10 @@ class TrustedContactsScreen extends ConsumerWidget {
                               ? (enabled) async {
                                   await ref
                                       .read(chatControllerProvider.notifier)
-                                      .setWalkieAlwaysOn(contact.nodeId, enabled);
+                                      .setWalkieAlwaysOn(
+                                        contact.nodeId,
+                                        enabled,
+                                      );
                                 }
                               : null,
                         ),

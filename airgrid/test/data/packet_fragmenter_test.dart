@@ -119,8 +119,12 @@ void main() {
 
       // All fragments should reference the same list instance as the original
       for (final frag in frags) {
-        expect(identical(frag.seenByNodes, packet.seenByNodes), isTrue,
-          reason: 'Fragments should share seenByNodes reference to avoid allocation');
+        expect(
+          identical(frag.seenByNodes, packet.seenByNodes),
+          isTrue,
+          reason:
+              'Fragments should share seenByNodes reference to avoid allocation',
+        );
       }
     });
 
@@ -419,10 +423,7 @@ void main() {
       expect(identical(fragsB[0].seenByNodes, fragsB[1].seenByNodes), isTrue);
 
       // Different packets have different lists
-      expect(
-        identical(fragsA[0].seenByNodes, fragsB[0].seenByNodes),
-        isFalse,
-      );
+      expect(identical(fragsA[0].seenByNodes, fragsB[0].seenByNodes), isFalse);
 
       // Reassemble both packets successfully
       AirGridPacket? assembledA;

@@ -22,8 +22,7 @@ class SharedPrefsPrivacySettingsStore implements PrivacySettingsStore {
   final SharedPreferences _prefs;
   PrivacyMode _cached;
 
-  SharedPrefsPrivacySettingsStore._(this._prefs)
-      : _cached = _load(_prefs);
+  SharedPrefsPrivacySettingsStore._(this._prefs) : _cached = _load(_prefs);
 
   static PrivacyMode _load(SharedPreferences prefs) {
     final raw = prefs.getString(_prefsKey);
@@ -60,8 +59,9 @@ class SharedPrefsPrivacySettingsStore implements PrivacySettingsStore {
 class InMemoryPrivacySettingsStore implements PrivacySettingsStore {
   PrivacyMode _mode;
 
-  InMemoryPrivacySettingsStore({PrivacyMode initialMode = PrivacyMode.everyoneNearby})
-      : _mode = initialMode;
+  InMemoryPrivacySettingsStore({
+    PrivacyMode initialMode = PrivacyMode.everyoneNearby,
+  }) : _mode = initialMode;
 
   @override
   Future<PrivacyMode> getPrivacyMode() async => _mode;

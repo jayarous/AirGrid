@@ -22,8 +22,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   }
 
   Future<void> _export() async {
-    final text =
-        await ref.read(chatControllerProvider.notifier).exportReports();
+    final text = await ref
+        .read(chatControllerProvider.notifier)
+        .exportReports();
     if (!mounted) return;
     await Share.share(text);
   }
@@ -52,9 +53,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     await _store!.clear();
     if (!mounted) return;
     setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Reports cleared')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Reports cleared')));
   }
 
   @override
@@ -116,7 +117,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                 child: ListView.separated(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   itemCount: reports.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     final report = reports[index];
                     final ts = report.timestamp;

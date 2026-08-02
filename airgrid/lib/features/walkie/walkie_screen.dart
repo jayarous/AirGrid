@@ -29,7 +29,7 @@ class WalkieScreen extends ConsumerStatefulWidget {
 }
 
 class _WalkieScreenState extends ConsumerState<WalkieScreen>
-  with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   final AudioRecorder _audioRecorder = AudioRecorder();
   final DateTime _openedAt = DateTime.now();
   final Stopwatch _holdStopwatch = Stopwatch();
@@ -86,7 +86,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       }
       return;
     }
-    if (_speakerPulseController.isAnimating || _speakerPulseController.value != 0) {
+    if (_speakerPulseController.isAnimating ||
+        _speakerPulseController.value != 0) {
       _speakerPulseController.stop();
       _speakerPulseController.value = 0;
     }
@@ -118,7 +119,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     if (selected is PrivateConversation) {
       return selected.peerNodeId;
     }
-    return state.walkiePeerNodeId;
+    return state.walkie.peerNodeId;
   }
 
   Future<void> _handleIncomingWalkieUpdates(
@@ -129,7 +130,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
     final state = ref.read(chatControllerProvider);
     final selected = state.selectedConversation;
-    if (state.publicWalkieStayOnline ||
+    if (state.walkie.publicStayOnline ||
         (selected is PrivateConversation &&
             state.knownContacts.any(
               (contact) =>
@@ -162,8 +163,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       if (targetNodeId == null || targetNodeId.isEmpty) return;
 
       // Drop incoming audio if no active session with this peer.
-      final activeSessionNodeId =
-          ref.read(chatControllerProvider).walkieSessionActivePeerNodeId;
+      final activeSessionNodeId = ref
+          .read(chatControllerProvider)
+          .walkie
+          .sessionActivePeerNodeId;
       if (activeSessionNodeId != targetNodeId) return;
 
       for (final message in next) {
@@ -266,14 +269,20 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   }
 
   Future<void> _invitePeer(MeshPeer peer) async {
-    final ok = await ref.read(chatControllerProvider.notifier).sendWalkieInvite(peer);
+    final ok = await ref
+        .read(chatControllerProvider.notifier)
+        .sendWalkieInvite(peer);
     if (!mounted) return;
     setState(() {
-      _status = ok ? 'Invite sent to ${peer.displayName}' : 'Failed to send invite';
+      _status = ok
+          ? 'Invite sent to ${peer.displayName}'
+          : 'Failed to send invite';
     });
   }
 
-  Future<void> _autoStartPrivateWalkieIfEnabled(PrivateConversation target) async {
+  Future<void> _autoStartPrivateWalkieIfEnabled(
+    PrivateConversation target,
+  ) async {
     final state = ref.read(chatControllerProvider);
     final contact = state.knownContacts.cast<KnownContact?>().firstWhere(
       (item) => item?.nodeId == target.peerNodeId,
@@ -282,8 +291,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     if (contact == null || !contact.isTrusted || !contact.walkieAlwaysOn) {
       return;
     }
-    if (state.walkieInvitePeerNodeId == target.peerNodeId ||
-        state.walkieSessionActivePeerNodeId == target.peerNodeId) {
+    if (state.walkie.invitePeerNodeId == target.peerNodeId ||
+        state.walkie.sessionActivePeerNodeId == target.peerNodeId) {
       return;
     }
 
@@ -294,7 +303,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
   Future<void> _chooseTarget() async {
     final state = ref.read(chatControllerProvider);
-    final candidates = state.peers.where((peer) => peer.nodeId != null).toList();
+    final candidates = state.peers
+        .where((peer) => peer.nodeId != null)
+        .toList();
     if (candidates.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -313,9 +324,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const ListTile(
-              title: Text('Choose walkie target'),
-            ),
+            const ListTile(title: Text('Choose walkie target')),
             for (final peer in candidates)
               ListTile(
                 leading: Icon(
@@ -330,7 +339,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                 ),
                 trailing: peer.nodeId != null
                     ? TextButton(
-                        onPressed: () => Navigator.of(ctx).pop('invite:${peer.nodeId}'),
+                        onPressed: () =>
+                            Navigator.of(ctx).pop('invite:${peer.nodeId}'),
                         child: const Text('Invite'),
                       )
                     : const Text('Offline'),
@@ -360,12 +370,14 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
     if (selectedPeer == null) return;
 
-    ref.read(chatControllerProvider.notifier).selectConversation(
-      PrivateConversation(
-        peerNodeId: selectedNodeId,
-        peerName: selectedPeer.displayName,
-      ),
-    );
+    ref
+        .read(chatControllerProvider.notifier)
+        .selectConversation(
+          PrivateConversation(
+            peerNodeId: selectedNodeId,
+            peerName: selectedPeer.displayName,
+          ),
+        );
 
     await _autoStartPrivateWalkieIfEnabled(
       PrivateConversation(
@@ -377,7 +389,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
   Future<void> _startHoldRecording() async {
     final current = ref.read(chatControllerProvider);
-    if (current.walkieIsTransmitting || current.walkieIsSending) return;
+    if (current.walkie.isTransmitting || current.walkie.isSending) return;
 
     String? peerNodeIdForSession;
     if (!_isPublicMode) {
@@ -394,11 +406,13 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         return;
       }
 
-      if (current.walkieSessionActivePeerNodeId != target.peerNodeId) {
+      if (current.walkie.sessionActivePeerNodeId != target.peerNodeId) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('No active walkie session. Invite and wait for accept.'),
+            content: Text(
+              'No active walkie session. Invite and wait for accept.',
+            ),
             behavior: SnackBarBehavior.floating,
             duration: Duration(seconds: 2),
           ),
@@ -412,8 +426,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         orElse: () => null,
       );
       if (contact != null && contact.isTrusted && contact.walkieAlwaysOn) {
-        if (current.walkieInvitePeerNodeId != target.peerNodeId &&
-            current.walkieSessionActivePeerNodeId != target.peerNodeId) {
+        if (current.walkie.invitePeerNodeId != target.peerNodeId &&
+            current.walkie.sessionActivePeerNodeId != target.peerNodeId) {
           final peer = _peerByNodeId(target.peerNodeId);
           if (peer != null) {
             unawaited(_invitePeer(peer));
@@ -449,14 +463,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     }
 
     final tempDir = await getTemporaryDirectory();
-    final filePath = '${tempDir.path}${Platform.pathSeparator}airgrid_walkie_${const Uuid().v4()}.m4a';
+    final filePath =
+        '${tempDir.path}${Platform.pathSeparator}airgrid_walkie_${const Uuid().v4()}.m4a';
 
     try {
       await _audioRecorder.start(
-        const RecordConfig(
-          bitRate: 24000,
-          sampleRate: 16000,
-        ),
+        const RecordConfig(bitRate: 24000, sampleRate: 16000),
         path: filePath,
       );
     } catch (_) {
@@ -476,17 +488,19 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       ..reset()
       ..start();
     if (!mounted) return;
-    ref.read(chatControllerProvider.notifier).setWalkieTransmitting(
-      isTransmitting: true,
-      peerNodeId: peerNodeIdForSession,
-    );
+    ref
+        .read(chatControllerProvider.notifier)
+        .setWalkieTransmitting(
+          isTransmitting: true,
+          peerNodeId: peerNodeIdForSession,
+        );
     ref.read(chatControllerProvider.notifier).setWalkieLastError(null);
     setState(() {
       _elapsed = Duration.zero;
       _status = 'Transmitting... release to send';
     });
     _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      if (!mounted || !ref.read(chatControllerProvider).walkieIsTransmitting) {
+      if (!mounted || !ref.read(chatControllerProvider).walkie.isTransmitting) {
         return;
       }
       setState(() {
@@ -496,7 +510,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   }
 
   Future<void> _cancelHoldRecording() async {
-    if (!ref.read(chatControllerProvider).walkieIsTransmitting) return;
+    if (!ref.read(chatControllerProvider).walkie.isTransmitting) return;
     _ticker?.cancel();
     _ticker = null;
     _holdStopwatch
@@ -522,9 +536,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     }
 
     if (!mounted) return;
-    ref.read(chatControllerProvider.notifier).setWalkieTransmitting(
-      isTransmitting: false,
-    );
+    ref
+        .read(chatControllerProvider.notifier)
+        .setWalkieTransmitting(isTransmitting: false);
     setState(() {
       _elapsed = Duration.zero;
       _status = 'Canceled';
@@ -533,7 +547,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
   Future<void> _stopHoldAndSend() async {
     final current = ref.read(chatControllerProvider);
-    if (!current.walkieIsTransmitting || current.walkieIsSending) return;
+    if (!current.walkie.isTransmitting || current.walkie.isSending) return;
 
     _ticker?.cancel();
     _ticker = null;
@@ -542,9 +556,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     _holdStopwatch.reset();
 
     if (!mounted) return;
-    ref.read(chatControllerProvider.notifier).setWalkieTransmitting(
-      isTransmitting: false,
-    );
+    ref
+        .read(chatControllerProvider.notifier)
+        .setWalkieTransmitting(isTransmitting: false);
     ref.read(chatControllerProvider.notifier).setWalkieSending(isSending: true);
     setState(() {
       _status = 'Sending...';
@@ -559,12 +573,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
     if (recordedPath == null || recordedPath.isEmpty) {
       if (!mounted) return;
-      ref.read(chatControllerProvider.notifier).setWalkieSending(
-        isSending: false,
-      );
-      ref.read(chatControllerProvider.notifier).setWalkieLastError(
-        'Recording unavailable',
-      );
+      ref
+          .read(chatControllerProvider.notifier)
+          .setWalkieSending(isSending: false);
+      ref
+          .read(chatControllerProvider.notifier)
+          .setWalkieLastError('Recording unavailable');
       setState(() {
         _status = 'Recording unavailable';
       });
@@ -609,9 +623,13 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           throw _WalkieSendException(e.message);
         }
         if (!mounted) return;
-        ref.read(chatControllerProvider.notifier).setWalkieSending(isSending: false);
+        ref
+            .read(chatControllerProvider.notifier)
+            .setWalkieSending(isSending: false);
         ref.read(chatControllerProvider.notifier).setWalkieLastError(null);
-        setState(() { _status = 'Sent ${_formatDuration(duration)}'; });
+        setState(() {
+          _status = 'Sent ${_formatDuration(duration)}';
+        });
         return;
       }
       final selectedState = ref.read(chatControllerProvider);
@@ -660,30 +678,30 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       }
 
       if (!mounted) return;
-      ref.read(chatControllerProvider.notifier).setWalkieSending(
-        isSending: false,
-      );
+      ref
+          .read(chatControllerProvider.notifier)
+          .setWalkieSending(isSending: false);
       ref.read(chatControllerProvider.notifier).setWalkieLastError(null);
       setState(() {
         _status = 'Sent ${_formatDuration(duration)}';
       });
     } on _WalkieSendException catch (e) {
       if (!mounted) return;
-      ref.read(chatControllerProvider.notifier).setWalkieSending(
-        isSending: false,
-      );
+      ref
+          .read(chatControllerProvider.notifier)
+          .setWalkieSending(isSending: false);
       ref.read(chatControllerProvider.notifier).setWalkieLastError(e.message);
       setState(() {
         _status = e.message;
       });
     } catch (_) {
       if (!mounted) return;
-      ref.read(chatControllerProvider.notifier).setWalkieSending(
-        isSending: false,
-      );
-      ref.read(chatControllerProvider.notifier).setWalkieLastError(
-        'Failed to send',
-      );
+      ref
+          .read(chatControllerProvider.notifier)
+          .setWalkieSending(isSending: false);
+      ref
+          .read(chatControllerProvider.notifier)
+          .setWalkieLastError('Failed to send');
       setState(() {
         _status = 'Failed to send';
       });
@@ -731,13 +749,13 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     final indicatorColor = isOn
         ? const Color(0xFF57D163)
         : enabled
-            ? _radioAmber
-            : Colors.grey.shade500;
+        ? _radioAmber
+        : Colors.grey.shade500;
     final buttonFill = isOn ? const Color(0xFF2E4A35) : const Color(0xFF2C333D);
     final buttonTextColor = isOn ? Colors.white : Colors.white.withAlpha(220);
     final chatDotColor = chatLaunchFlash
-      ? const Color(0xFF57D163)
-      : openChatEnabled
+        ? const Color(0xFF57D163)
+        : openChatEnabled
         ? _radioAmber
         : Colors.grey.shade500;
     return Padding(
@@ -761,7 +779,10 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 120),
                   curve: Curves.easeOut,
-                  margin: EdgeInsets.only(top: isOn ? 3 : 0, bottom: isOn ? 0 : 3),
+                  margin: EdgeInsets.only(
+                    top: isOn ? 3 : 0,
+                    bottom: isOn ? 0 : 3,
+                  ),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
                     color: buttonFill,
@@ -818,7 +839,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                         color: indicatorColor,
                                         boxShadow: [
                                           BoxShadow(
-                                            color: indicatorColor.withAlpha(130),
+                                            color: indicatorColor.withAlpha(
+                                              130,
+                                            ),
                                             blurRadius: 6,
                                             spreadRadius: 1,
                                           ),
@@ -1133,10 +1156,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           Text(
             selectedDescription,
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white.withAlpha(180),
-              fontSize: 12,
-            ),
+            style: TextStyle(color: Colors.white.withAlpha(180), fontSize: 12),
           ),
         ],
       ),
@@ -1147,12 +1167,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     final level = onlineCount <= 0
         ? 0
         : onlineCount == 1
-            ? 1
-            : onlineCount <= 3
-                ? 2
-                : onlineCount <= 5
-                    ? 3
-                    : 4;
+        ? 1
+        : onlineCount <= 3
+        ? 2
+        : onlineCount <= 5
+        ? 3
+        : 4;
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -1188,7 +1208,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     required bool isTargetOnline,
     required ThemeData theme,
   }) {
-    final peerLabelColor = peerCount > 0 ? Colors.greenAccent.shade200 : _radioAmber;
+    final peerLabelColor = peerCount > 0
+        ? Colors.greenAccent.shade200
+        : _radioAmber;
     final showOnlineBadge = !isPublicMode && isTargetOnline;
 
     return Container(
@@ -1231,15 +1253,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                     fontWeight: FontWeight.w700,
                     letterSpacing: 1.2,
                     shadows: [
-                      Shadow(
-                        color: _radioAmber.withAlpha(130),
-                        blurRadius: 12,
-                      ),
+                      Shadow(color: _radioAmber.withAlpha(130), blurRadius: 12),
                     ],
                   ),
                 ),
               ),
-              if (showOnlineBadge) ...[  
+              if (showOnlineBadge) ...[
                 const SizedBox(width: 8),
                 Text(
                   'ONLINE',
@@ -1300,9 +1319,13 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         : (isEnabled ? _radioAmber : Colors.grey.shade600);
 
     return GestureDetector(
-      onLongPressStart: isEnabled ? (_) => unawaited(_startHoldRecording()) : null,
+      onLongPressStart: isEnabled
+          ? (_) => unawaited(_startHoldRecording())
+          : null,
       onLongPressEnd: isEnabled ? (_) => unawaited(_stopHoldAndSend()) : null,
-      onLongPressCancel: isEnabled ? () => unawaited(_cancelHoldRecording()) : null,
+      onLongPressCancel: isEnabled
+          ? () => unawaited(_cancelHoldRecording())
+          : null,
       onTap: isHolding ? onCancel : null,
       child: AnimatedBuilder(
         animation: _speakerPulse,
@@ -1325,10 +1348,22 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                 boxShadow: [
                   BoxShadow(
                     color: glowColor.withAlpha(
-                      speakerActive ? 150 + (40 * pulse).toInt() : isHolding ? 170 : 120,
+                      speakerActive
+                          ? 150 + (40 * pulse).toInt()
+                          : isHolding
+                          ? 170
+                          : 120,
                     ),
-                    blurRadius: speakerActive ? 18 + (10 * pulse) : isHolding ? 30 : 18,
-                    spreadRadius: speakerActive ? 2 + (2 * pulse) : isHolding ? 5 : 1,
+                    blurRadius: speakerActive
+                        ? 18 + (10 * pulse)
+                        : isHolding
+                        ? 30
+                        : 18,
+                    spreadRadius: speakerActive
+                        ? 2 + (2 * pulse)
+                        : isHolding
+                        ? 5
+                        : 1,
                   ),
                   BoxShadow(
                     color: Colors.black.withAlpha(100),
@@ -1365,8 +1400,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                   isHolding
                       ? 'TRANSMITTING'
                       : isSending
-                          ? 'SENDING'
-                          : 'HOLD TO TALK',
+                      ? 'SENDING'
+                      : 'HOLD TO TALK',
                   style: TextStyle(
                     color: isEnabled ? _radioAmber : Colors.white70,
                     fontFamily: 'monospace',
@@ -1397,7 +1432,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   @override
   Widget build(BuildContext context) {
     ref.listen<String?>(
-      chatControllerProvider.select((state) => state.walkieLastError),
+      chatControllerProvider.select((state) => state.walkie.lastError),
       (previous, next) {
         if (!mounted || next == null || next.isEmpty || next == previous) {
           return;
@@ -1420,80 +1455,81 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     );
 
     final state = ref.watch(chatControllerProvider);
-    final isHolding = state.walkieIsTransmitting;
-    final isSending = state.walkieIsSending;
+    final isHolding = state.walkie.isTransmitting;
+    final isSending = state.walkie.isSending;
     final selected = state.selectedConversation;
     final targetNodeId = selected is PrivateConversation
-      ? selected.peerNodeId
-      : state.walkiePeerNodeId;
+        ? selected.peerNodeId
+        : state.walkie.peerNodeId;
     final hasTarget = targetNodeId != null && targetNodeId.isNotEmpty;
     final isTargetOnline =
-      hasTarget && state.peers.any((p) => p.nodeId == targetNodeId);
+        hasTarget && state.peers.any((p) => p.nodeId == targetNodeId);
     final targetName = selected is PrivateConversation
         ? selected.peerName
         : 'No private target selected';
-    final invitePeer = _peerByNodeId(state.walkieInvitePeerNodeId);
-    final isIncomingInvite = state.walkieInviteIsIncoming;
+    final invitePeer = _peerByNodeId(state.walkie.invitePeerNodeId);
+    final isIncomingInvite = state.walkie.inviteIsIncoming;
     final isActiveSessionForTarget = _isPublicMode
         ? state.meshStarted
-        : hasTarget && state.walkieSessionActivePeerNodeId == targetNodeId;
+        : hasTarget && state.walkie.sessionActivePeerNodeId == targetNodeId;
     final isOutgoingInviteForTarget =
         !_isPublicMode &&
         !isIncomingInvite &&
         hasTarget &&
-        state.walkieInvitePeerNodeId == targetNodeId &&
+        state.walkie.invitePeerNodeId == targetNodeId &&
         !isActiveSessionForTarget;
     final pingEnabled = !(isHolding || isSending) && !_isPublicMode;
     final pingDotColor = _isPublicMode
         ? Colors.grey.shade500
         : isActiveSessionForTarget
-            ? Colors.greenAccent.shade200
-            : isOutgoingInviteForTarget
-                ? Colors.redAccent.shade100
-                : (hasTarget && isTargetOnline)
-                    ? _radioAmber
-                    : Colors.grey.shade500;
+        ? Colors.greenAccent.shade200
+        : isOutgoingInviteForTarget
+        ? Colors.redAccent.shade100
+        : (hasTarget && isTargetOnline)
+        ? _radioAmber
+        : Colors.grey.shade500;
     final theme = Theme.of(context);
     final selectedPrivateContact = selected is PrivateConversation
-      ? state.knownContacts.cast<KnownContact?>().firstWhere(
-        (item) => item?.nodeId == selected.peerNodeId,
-        orElse: () => null,
-        )
-      : null;
+        ? state.knownContacts.cast<KnownContact?>().firstWhere(
+            (item) => item?.nodeId == selected.peerNodeId,
+            orElse: () => null,
+          )
+        : null;
     final privateStayOnlineEligible =
-      selected is PrivateConversation &&
-      selectedPrivateContact != null &&
-      selectedPrivateContact.isTrusted;
+        selected is PrivateConversation &&
+        selectedPrivateContact != null &&
+        selectedPrivateContact.isTrusted;
     final stayOnlineOn = _isPublicMode
-      ? state.publicWalkieStayOnline
-      : (selectedPrivateContact?.walkieAlwaysOn ?? false);
+        ? state.walkie.publicStayOnline
+        : (selectedPrivateContact?.walkieAlwaysOn ?? false);
     final stayOnlineEnabled =
-      !(isHolding || isSending) && (_isPublicMode || privateStayOnlineEligible);
+        !(isHolding || isSending) &&
+        (_isPublicMode || privateStayOnlineEligible);
     final stayOnlineHint = _isPublicMode
-      ? 'Keep receiving public walkie voice across screens.'
-      : selected is! PrivateConversation
+        ? 'Keep receiving public walkie voice across screens.'
+        : selected is! PrivateConversation
         ? 'Select a private target to enable stay online.'
         : privateStayOnlineEligible
-          ? 'Latches always-on walkie for this trusted friend.'
-          : 'Trust this friend first to enable private stay online.';
+        ? 'Latches always-on walkie for this trusted friend.'
+        : 'Trust this friend first to enable private stay online.';
     final privateAlwaysOnCount = state.knownContacts
         .where((contact) => contact.isTrusted && contact.walkieAlwaysOn)
         .length;
     final alwaysOnlineChannelParts = <String>[];
-    if (state.publicWalkieStayOnline) {
+    if (state.walkie.publicStayOnline) {
       alwaysOnlineChannelParts.add('CH-07 PUBLIC');
     }
     if (privateAlwaysOnCount > 0) {
-      final suffix = privateAlwaysOnCount > 1
-          ? ' ($privateAlwaysOnCount)'
-          : '';
+      final suffix = privateAlwaysOnCount > 1 ? ' ($privateAlwaysOnCount)' : '';
       alwaysOnlineChannelParts.add('CH-01 PRIVATE$suffix');
     }
     final alwaysOnlineLabel = alwaysOnlineChannelParts.isEmpty
-      ? null
-      : alwaysOnlineChannelParts.join('  •  ');
+        ? null
+        : alwaysOnlineChannelParts.join('  •  ');
     final speakerActive =
-      isHolding || isSending || (_status?.startsWith('Incoming walkie') ?? false);
+        isHolding ||
+        isSending ||
+        (_status?.startsWith('Incoming walkie') ?? false);
     _syncSpeakerPulse(speakerActive);
 
     final callLabel = _isPublicMode
@@ -1537,8 +1573,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     final selectedChannelDescription = selectedEntry.isPublic
         ? 'Channel 07: Open broadcast'
         : selectedEntry.peerNodeId == null
-            ? 'Channel 01: Paired private session'
-            : 'Channel ${selectedEntry.number.toString().padLeft(2, '0')}: ${selectedEntry.displayName}';
+        ? 'Channel 01: Paired private session'
+        : 'Channel ${selectedEntry.number.toString().padLeft(2, '0')}: ${selectedEntry.displayName}';
 
     return Scaffold(
       backgroundColor: const Color(0xFF07090D),
@@ -1583,203 +1619,237 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                     child: SizedBox(
                       width: 460,
                       child: Container(
-                      padding: EdgeInsets.all(shellPadding),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(30),
-                        border: Border.all(color: Colors.white.withAlpha(20)),
-                        gradient: const LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [_radioShell, _radioShellDark],
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withAlpha(110),
-                            blurRadius: 26,
-                            offset: const Offset(0, 14),
+                        padding: EdgeInsets.all(shellPadding),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(30),
+                          border: Border.all(color: Colors.white.withAlpha(20)),
+                          gradient: const LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [_radioShell, _radioShellDark],
                           ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                        _buildChannelSelector(
-                          isLocked: isHolding || isSending,
-                          entries: channelEntries,
-                          selectedIndex: selectedChannelIndex,
-                          selectedDescription: selectedChannelDescription,
-                          onSelectIndex: (index) {
-                            final selected = channelEntries[index];
-                            if (selected.isPublic) {
-                              if (_isPublicMode) return;
-                              setState(() {
-                                _isPublicMode = true;
-                                _status = null;
-                              });
-                              return;
-                            }
-
-                            setState(() {
-                              _isPublicMode = false;
-                              _status = null;
-                            });
-
-                            final nodeId = selected.peerNodeId;
-                            final peerName = selected.peerName;
-                            if (nodeId == null || peerName == null) return;
-                            final target = PrivateConversation(
-                              peerNodeId: nodeId,
-                              peerName: peerName,
-                            );
-                            ref
-                                .read(chatControllerProvider.notifier)
-                                .selectConversation(target);
-                            unawaited(_autoStartPrivateWalkieIfEnabled(target));
-                          },
-                        ),
-                        SizedBox(height: sectionGap),
-                        _buildDisplayPanel(
-                          callLabel: callLabel,
-                          peerCount: state.peers.length,
-                          alwaysOnlineLabel: alwaysOnlineLabel,
-                          isPublicMode: _isPublicMode,
-                          isTargetOnline: isTargetOnline,
-                          theme: theme,
-                        ),
-                        SizedBox(height: 10 * uiScale),
-                        SizedBox(
-                          height: controlSectionHeight,
-                          child: SingleChildScrollView(
-                            child: Column(
-                              children: [
-                                _buildLatchingPushButton(
-                                  isOn: stayOnlineOn,
-                                  enabled: stayOnlineEnabled,
-                                  hintText: stayOnlineHint,
-                                  openChatEnabled: !(isHolding || isSending),
-                                  chatLaunchFlash: _chatLaunchFlash,
-                                  pingDotColor: pingDotColor,
-                                  pingEnabled: pingEnabled,
-                                  onPressed: () {
-                                    _triggerButtonFeedback();
-                                    if (_isPublicMode) {
-                                      ref
-                                          .read(chatControllerProvider.notifier)
-                                          .setPublicWalkieStayOnline(!stayOnlineOn);
-                                      return;
-                                    }
-                                    if (selected is PrivateConversation &&
-                                        privateStayOnlineEligible) {
-                                      ref
-                                          .read(chatControllerProvider.notifier)
-                                          .setWalkieAlwaysOn(
-                                            selected.peerNodeId,
-                                            !stayOnlineOn,
-                                          );
-                                    }
-                                  },
-                                  onOpenChat: () async {
-                                    if (isHolding || isSending || _chatLaunchFlash) {
-                                      return;
-                                    }
-                                    _triggerButtonFeedback();
-                                    final navigator = Navigator.of(context);
-                                    if (!mounted) return;
-                                    setState(() {
-                                      _chatLaunchFlash = true;
-                                    });
-                                    await Future<void>.delayed(
-                                      const Duration(milliseconds: 120),
-                                    );
-                                    if (!mounted) return;
-                                    await navigator.pushNamed(AppRouter.chat);
-                                    if (!mounted) return;
-                                    setState(() {
-                                      _chatLaunchFlash = false;
-                                    });
-                                  },
-                                  onPing: () async {
-                                    if (!pingEnabled) return;
-                                    _triggerButtonFeedback();
-                                    if (isActiveSessionForTarget) {
-                                      await ref
-                                          .read(chatControllerProvider.notifier)
-                                          .endWalkieSession();
-                                      return;
-                                    }
-                                    if (isOutgoingInviteForTarget) {
-                                      await ref
-                                          .read(chatControllerProvider.notifier)
-                                          .cancelWalkieInvite();
-                                      return;
-                                    }
-                                    if (!hasTarget || !isTargetOnline) return;
-                                    final peer = _peerByNodeId(targetNodeId);
-                                    if (peer == null) return;
-                                    await _invitePeer(peer);
-                                  },
-                                ),
-                                if (!_isPublicMode) ...[
-                                  if (isIncomingInvite && invitePeer != null) ...[
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: FilledButton(
-                                              style: FilledButton.styleFrom(
-                                                backgroundColor: _radioAmber,
-                                                foregroundColor: Colors.black,
-                                              ),
-                                              onPressed: () async {
-                                                await ref
-                                                    .read(chatControllerProvider.notifier)
-                                                    .acceptWalkieInvite();
-                                              },
-                                              child: const Text('Accept invite'),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: OutlinedButton(
-                                              onPressed: () async {
-                                                await ref
-                                                    .read(chatControllerProvider.notifier)
-                                                    .declineWalkieInvite();
-                                              },
-                                              child: const Text('Decline'),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ],
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withAlpha(110),
+                              blurRadius: 26,
+                              offset: const Offset(0, 14),
                             ),
-                          ),
+                          ],
                         ),
-                        SizedBox(height: sectionGap),
-                        Center(
-                          child: _buildPttButton(
-                            isEnabled: isActiveSessionForTarget,
-                            isHolding: isHolding,
-                            isSending: isSending,
-                            speakerActive: speakerActive,
-                            size: pttSize,
-                            onCancel: isActiveSessionForTarget
-                                ? () => unawaited(_cancelHoldRecording())
-                                : null,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildChannelSelector(
+                              isLocked: isHolding || isSending,
+                              entries: channelEntries,
+                              selectedIndex: selectedChannelIndex,
+                              selectedDescription: selectedChannelDescription,
+                              onSelectIndex: (index) {
+                                final selected = channelEntries[index];
+                                if (selected.isPublic) {
+                                  if (_isPublicMode) return;
+                                  setState(() {
+                                    _isPublicMode = true;
+                                    _status = null;
+                                  });
+                                  return;
+                                }
+
+                                setState(() {
+                                  _isPublicMode = false;
+                                  _status = null;
+                                });
+
+                                final nodeId = selected.peerNodeId;
+                                final peerName = selected.peerName;
+                                if (nodeId == null || peerName == null) return;
+                                final target = PrivateConversation(
+                                  peerNodeId: nodeId,
+                                  peerName: peerName,
+                                );
+                                ref
+                                    .read(chatControllerProvider.notifier)
+                                    .selectConversation(target);
+                                unawaited(
+                                  _autoStartPrivateWalkieIfEnabled(target),
+                                );
+                              },
+                            ),
+                            SizedBox(height: sectionGap),
+                            _buildDisplayPanel(
+                              callLabel: callLabel,
+                              peerCount: state.peers.length,
+                              alwaysOnlineLabel: alwaysOnlineLabel,
+                              isPublicMode: _isPublicMode,
+                              isTargetOnline: isTargetOnline,
+                              theme: theme,
+                            ),
+                            SizedBox(height: 10 * uiScale),
+                            SizedBox(
+                              height: controlSectionHeight,
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  children: [
+                                    _buildLatchingPushButton(
+                                      isOn: stayOnlineOn,
+                                      enabled: stayOnlineEnabled,
+                                      hintText: stayOnlineHint,
+                                      openChatEnabled:
+                                          !(isHolding || isSending),
+                                      chatLaunchFlash: _chatLaunchFlash,
+                                      pingDotColor: pingDotColor,
+                                      pingEnabled: pingEnabled,
+                                      onPressed: () {
+                                        _triggerButtonFeedback();
+                                        if (_isPublicMode) {
+                                          ref
+                                              .read(
+                                                chatControllerProvider.notifier,
+                                              )
+                                              .setPublicWalkieStayOnline(
+                                                !stayOnlineOn,
+                                              );
+                                          return;
+                                        }
+                                        if (selected is PrivateConversation &&
+                                            privateStayOnlineEligible) {
+                                          ref
+                                              .read(
+                                                chatControllerProvider.notifier,
+                                              )
+                                              .setWalkieAlwaysOn(
+                                                selected.peerNodeId,
+                                                !stayOnlineOn,
+                                              );
+                                        }
+                                      },
+                                      onOpenChat: () async {
+                                        if (isHolding ||
+                                            isSending ||
+                                            _chatLaunchFlash) {
+                                          return;
+                                        }
+                                        _triggerButtonFeedback();
+                                        final navigator = Navigator.of(context);
+                                        if (!mounted) return;
+                                        setState(() {
+                                          _chatLaunchFlash = true;
+                                        });
+                                        await Future<void>.delayed(
+                                          const Duration(milliseconds: 120),
+                                        );
+                                        if (!mounted) return;
+                                        await navigator.pushNamed(
+                                          AppRouter.chat,
+                                        );
+                                        if (!mounted) return;
+                                        setState(() {
+                                          _chatLaunchFlash = false;
+                                        });
+                                      },
+                                      onPing: () async {
+                                        if (!pingEnabled) return;
+                                        _triggerButtonFeedback();
+                                        if (isActiveSessionForTarget) {
+                                          await ref
+                                              .read(
+                                                chatControllerProvider.notifier,
+                                              )
+                                              .endWalkieSession();
+                                          return;
+                                        }
+                                        if (isOutgoingInviteForTarget) {
+                                          await ref
+                                              .read(
+                                                chatControllerProvider.notifier,
+                                              )
+                                              .cancelWalkieInvite();
+                                          return;
+                                        }
+                                        if (!hasTarget || !isTargetOnline) {
+                                          return;
+                                        }
+                                        final peer = _peerByNodeId(
+                                          targetNodeId,
+                                        );
+                                        if (peer == null) return;
+                                        await _invitePeer(peer);
+                                      },
+                                    ),
+                                    if (!_isPublicMode) ...[
+                                      if (isIncomingInvite &&
+                                          invitePeer != null) ...[
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Expanded(
+                                                child: FilledButton(
+                                                  style: FilledButton.styleFrom(
+                                                    backgroundColor:
+                                                        _radioAmber,
+                                                    foregroundColor:
+                                                        Colors.black,
+                                                  ),
+                                                  onPressed: () async {
+                                                    await ref
+                                                        .read(
+                                                          chatControllerProvider
+                                                              .notifier,
+                                                        )
+                                                        .acceptWalkieInvite();
+                                                  },
+                                                  child: const Text(
+                                                    'Accept invite',
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: OutlinedButton(
+                                                  onPressed: () async {
+                                                    await ref
+                                                        .read(
+                                                          chatControllerProvider
+                                                              .notifier,
+                                                        )
+                                                        .declineWalkieInvite();
+                                                  },
+                                                  child: const Text('Decline'),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                            SizedBox(height: sectionGap),
+                            Center(
+                              child: _buildPttButton(
+                                isEnabled: isActiveSessionForTarget,
+                                isHolding: isHolding,
+                                isSending: isSending,
+                                speakerActive: speakerActive,
+                                size: pttSize,
+                                onCancel: isActiveSessionForTarget
+                                    ? () => unawaited(_cancelHoldRecording())
+                                    : null,
+                              ),
+                            ),
+                            SizedBox(height: statusGap),
+                          ],
                         ),
-                        SizedBox(height: statusGap),
-                      ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-          );
+              );
             },
           ),
         ),
@@ -1814,10 +1884,7 @@ class _AutoScrollMarquee extends StatefulWidget {
   final String text;
   final TextStyle? style;
 
-  const _AutoScrollMarquee({
-    required this.text,
-    this.style,
-  });
+  const _AutoScrollMarquee({required this.text, this.style});
 
   @override
   State<_AutoScrollMarquee> createState() => _AutoScrollMarqueeState();

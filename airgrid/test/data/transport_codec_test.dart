@@ -156,25 +156,25 @@ void main() {
       _expectRoundTrip(p, TransportCodec.decode(TransportCodec.encode(p)));
     });
 
-      test('image packet round-trip', () {
-        final packet = AirGridPacket(
-          messageId: 'img-rt-1',
-          senderNodeId: 'node-alice',
-          senderName: 'Alice',
-          timestamp: 1700000000000,
-          content: '{"kind":"image","data":"abc"}',
-          seenByNodes: const ['node-alice'],
-          hopLimit: 8,
-          packetType: 'image',
-          conversationType: 'private',
-          recipientNodeId: 'node-bob',
-          encryptionVersion: 1,
-        );
+    test('image packet round-trip', () {
+      final packet = AirGridPacket(
+        messageId: 'img-rt-1',
+        senderNodeId: 'node-alice',
+        senderName: 'Alice',
+        timestamp: 1700000000000,
+        content: '{"kind":"image","data":"abc"}',
+        seenByNodes: const ['node-alice'],
+        hopLimit: 8,
+        packetType: 'image',
+        conversationType: 'private',
+        recipientNodeId: 'node-bob',
+        encryptionVersion: 1,
+      );
 
-        final bytes = TransportCodec.encode(packet);
-        final decoded = TransportCodec.decode(bytes);
-        _expectRoundTrip(packet, decoded);
-      });
+      final bytes = TransportCodec.encode(packet);
+      final decoded = TransportCodec.decode(bytes);
+      _expectRoundTrip(packet, decoded);
+    });
 
     test('key_announce round-trip with senderPublicKey', () {
       final p = AirGridPacket(

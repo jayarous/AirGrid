@@ -1,11 +1,13 @@
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
+import 'package:airgrid/data/storage/chat_list_preferences_store.dart';
 import 'package:airgrid/data/storage/known_contact_store.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
 import 'package:airgrid/data/storage/message_repository.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
+import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
@@ -73,6 +75,12 @@ ProviderContainer _container({
       privacySettingsStoreProvider.overrideWithValue(
         InMemoryPrivacySettingsStore(),
       ),
+      publicWalkieSettingsStoreProvider.overrideWithValue(
+        InMemoryPublicWalkieSettingsStore(),
+      ),
+      chatListPreferencesStoreProvider.overrideWithValue(
+        InMemoryChatListPreferencesStore(),
+      ),
       batterySettingsStoreProvider.overrideWithValue(
         InMemoryBatterySettingsStore(),
       ),
@@ -88,44 +96,50 @@ void main() {
     final controller = container.read(chatControllerProvider.notifier);
 
     controller.setWalkiePeerNodeId('peer-1');
-    controller.setWalkieTransmitting(isTransmitting: true, peerNodeId: 'peer-1');
+    controller.setWalkieTransmitting(
+      isTransmitting: true,
+      peerNodeId: 'peer-1',
+    );
     controller.setWalkieSending(isSending: true);
     controller.setWalkieLastError('mesh offline');
 
     var state = container.read(chatControllerProvider);
-    expect(state.walkiePeerNodeId, 'peer-1');
-    expect(state.walkieIsTransmitting, isTrue);
-    expect(state.walkieIsSending, isTrue);
-    expect(state.walkieLastError, 'mesh offline');
+    expect(state.walkie.peerNodeId, 'peer-1');
+    expect(state.walkie.isTransmitting, isTrue);
+    expect(state.walkie.isSending, isTrue);
+    expect(state.walkie.lastError, 'mesh offline');
 
     controller.setWalkieTransmitting(isTransmitting: false);
     controller.setWalkieSending(isSending: false);
     controller.setWalkieLastError(null);
 
     state = container.read(chatControllerProvider);
-    expect(state.walkieIsTransmitting, isFalse);
-    expect(state.walkieIsSending, isFalse);
-    expect(state.walkieLastError, isNull);
+    expect(state.walkie.isTransmitting, isFalse);
+    expect(state.walkie.isSending, isFalse);
+    expect(state.walkie.lastError, isNull);
   });
 
-  test('selectConversation syncs walkiePeerNodeId for private threads', () async {
-    final container = _container(identity: await _identity());
-    addTearDown(container.dispose);
+  test(
+    'selectConversation syncs walkiePeerNodeId for private threads',
+    () async {
+      final container = _container(identity: await _identity());
+      addTearDown(container.dispose);
 
-    final controller = container.read(chatControllerProvider.notifier);
+      final controller = container.read(chatControllerProvider.notifier);
 
-    controller.selectConversation(
-      const PrivateConversation(peerNodeId: 'peer-42', peerName: 'Alex'),
-    );
+      controller.selectConversation(
+        const PrivateConversation(peerNodeId: 'peer-42', peerName: 'Alex'),
+      );
 
-    var state = container.read(chatControllerProvider);
-    expect(state.walkiePeerNodeId, 'peer-42');
+      var state = container.read(chatControllerProvider);
+      expect(state.walkie.peerNodeId, 'peer-42');
 
-    controller.selectConversation(const PublicConversation());
+      controller.selectConversation(const PublicConversation());
 
-    state = container.read(chatControllerProvider);
-    expect(state.walkiePeerNodeId, isNull);
-  });
+      state = container.read(chatControllerProvider);
+      expect(state.walkie.peerNodeId, isNull);
+    },
+  );
 
   test('stopMesh clears walkie active flags and error', () async {
     final transport = FakeTransport();
@@ -139,23 +153,29 @@ void main() {
     addTearDown(foreground.dispose);
 
     final controller = container.read(chatControllerProvider.notifier);
-    controller.setWalkieTransmitting(isTransmitting: true, peerNodeId: 'peer-9');
+    controller.setWalkieTransmitting(
+      isTransmitting: true,
+      peerNodeId: 'peer-9',
+    );
     controller.setWalkieSending(isSending: true);
     controller.setWalkieLastError('failed');
 
     await controller.stopMesh();
 
     final state = container.read(chatControllerProvider);
-    expect(state.walkieIsTransmitting, isFalse);
-    expect(state.walkieIsSending, isFalse);
-    expect(state.walkieLastError, isNull);
+    expect(state.walkie.isTransmitting, isFalse);
+    expect(state.walkie.isSending, isFalse);
+    expect(state.walkie.lastError, isNull);
     expect(transport.stopCount, 1);
     expect(foreground.stopCount, 1);
   });
 
   test('sendWalkieInvite sets outgoing invite state', () async {
     final transport = FakeTransport();
-    final container = _container(identity: await _identity(), transport: transport);
+    final container = _container(
+      identity: await _identity(),
+      transport: transport,
+    );
     addTearDown(container.dispose);
 
     transport.connectPeer('endpoint-1', name: 'Alex', nodeId: 'peer-1');
@@ -173,9 +193,9 @@ void main() {
 
     expect(ok, isTrue);
     final state = container.read(chatControllerProvider);
-    expect(state.walkieInviteSessionId, isNotNull);
-    expect(state.walkieInvitePeerNodeId, 'peer-1');
-    expect(state.walkieInviteIsIncoming, isFalse);
+    expect(state.walkie.inviteSessionId, isNotNull);
+    expect(state.walkie.invitePeerNodeId, 'peer-1');
+    expect(state.walkie.inviteIsIncoming, isFalse);
     expect(transport.sentPayloads, isNotEmpty);
   });
 }

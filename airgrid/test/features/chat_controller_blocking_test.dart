@@ -1,11 +1,13 @@
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
+import 'package:airgrid/data/storage/chat_list_preferences_store.dart';
 import 'package:airgrid/data/storage/known_contact_store.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
 import 'package:airgrid/data/storage/message_repository.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
+import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
@@ -90,6 +92,12 @@ ProviderContainer _makeContainer({
       localReportStoreProvider.overrideWithValue(InMemoryLocalReportStore()),
       privacySettingsStoreProvider.overrideWithValue(
         InMemoryPrivacySettingsStore(),
+      ),
+      publicWalkieSettingsStoreProvider.overrideWithValue(
+        InMemoryPublicWalkieSettingsStore(),
+      ),
+      chatListPreferencesStoreProvider.overrideWithValue(
+        InMemoryChatListPreferencesStore(),
       ),
       batterySettingsStoreProvider.overrideWithValue(
         InMemoryBatterySettingsStore(),

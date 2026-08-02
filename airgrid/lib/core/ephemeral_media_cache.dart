@@ -39,11 +39,7 @@ class EphemeralMediaCache {
     Uint8List bytes, {
     String extension = 'jpg',
   }) {
-    return writeMediaBytes(
-      transferId,
-      bytes,
-      extension: extension,
-    );
+    return writeMediaBytes(transferId, bytes, extension: extension);
   }
 
   Future<String> writeAudioBytes(
@@ -51,11 +47,7 @@ class EphemeralMediaCache {
     Uint8List bytes, {
     String extension = 'm4a',
   }) {
-    return writeMediaBytes(
-      transferId,
-      bytes,
-      extension: extension,
-    );
+    return writeMediaBytes(transferId, bytes, extension: extension);
   }
 
   Future<String> writeFileBytes(

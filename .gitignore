@@ -1,0 +1,21 @@
+# Root-level ignores.
+#
+# NOTE: airgrid/.gitignore only governs the airgrid/ subtree. Signing material
+# and scratch files live at the repository root, so they need rules here.
+# A correct rule in the wrong scope is the same as no rule.
+
+# ── Signing material — never commit ──────────────────────────────────────────
+*.jks
+*.keystore
+*.p12
+key.properties
+release-signing/
+
+# ── Device logs (contain real mesh node UUIDs) ───────────────────────────────
+logs/
+*.log
+
+# ── One-off codemod scratch scripts ──────────────────────────────────────────
+patch*.js
+patch*.dart
+fix_*.ps1

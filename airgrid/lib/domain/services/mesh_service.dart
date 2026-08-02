@@ -73,6 +73,27 @@ enum PrivateSendResult {
   failed,
 }
 
+/// Thrown when a packet cannot be serialised because it exceeds
+/// [AirGridConstants.kMaxPacketBytes].
+///
+/// This is a *permanent* failure, unlike a transport error: the same packet
+/// will fail identically on every retry. Callers must therefore never spool
+/// or retry a packet that raises this — doing so both misreports the send as
+/// successful and pins a packet in the spool that can never drain.
+class PacketTooLargeException implements Exception {
+  /// The ceiling that was exceeded.
+  final int limit;
+
+  /// The underlying codec error, kept for diagnostics.
+  final Object cause;
+
+  const PacketTooLargeException(this.limit, this.cause);
+
+  @override
+  String toString() =>
+      'PacketTooLargeException: packet exceeds $limit bytes ($cause).';
+}
+
 /// Core mesh routing engine for AirGrid.
 ///
 /// Responsibilities:
@@ -139,6 +160,18 @@ class AirGridMeshService {
   final _locationController = StreamController<PeerLocation>.broadcast();
   final _statusController =
       StreamController<({String messageId, DeliveryStatus status})>.broadcast();
+
+  /// Emits when a known node id announces a public key different from the one
+  /// previously pinned for it. See [keyChangeStream].
+  final _keyChangeController =
+      StreamController<
+        ({
+          String nodeId,
+          String displayName,
+          String previousPublicKeyBase64,
+          String newPublicKeyBase64,
+        })
+      >.broadcast();
 
   /// Maps transport packet IDs to local UI message IDs for resend flows.
   ///
@@ -238,17 +271,61 @@ class AirGridMeshService {
         packet.packetType == 'file';
   }
 
+  /// Display name to show for the sender of [packet].
+  ///
+  /// Prefers the name on the wire, but tolerates its absence: senders will
+  /// stop including `senderName` on private packets once phase 1 receivers
+  /// are widely deployed (see [DisplayNameValidator.validateRemoteOptional]).
+  /// Falls back to the known-contact record learned from `key_announce`, then
+  /// to 'Unknown'.
+  String _displayNameFor(AirGridPacket packet) {
+    if (packet.senderName.isNotEmpty) return packet.senderName;
+    final contact = _contactStore.contacts.cast<KnownContact?>().firstWhere(
+      (c) => c?.nodeId == packet.senderNodeId,
+      orElse: () => null,
+    );
+    final known = contact?.displayName;
+    if (known != null && known.isNotEmpty) return known;
+    return 'Unknown';
+  }
+
+  /// Wraps a codec size error as a typed, non-retryable failure and logs it.
+  PacketTooLargeException _asPacketTooLarge(ArgumentError e) {
+    AirGridLogger.log(
+      LogCategory.routing,
+      'Packet rejected: exceeds kMaxPacketBytes '
+      '(${AirGridConstants.kMaxPacketBytes}). Not retryable, not spooled.',
+    );
+    return PacketTooLargeException(AirGridConstants.kMaxPacketBytes, e);
+  }
+
   Future<void> _sendPacketFragments(
     AirGridPacket packet,
-    List<String> targets,
-    {void Function(double progress)? onProgress}
-  ) async {
+    List<String> targets, {
+    void Function(double progress)? onProgress,
+  }) async {
     final paced = _shouldPaceFragments(packet);
     final maxAttempts = paced ? 6 : 3;
-    final fragments = PacketFragmenter.fragment(packet);
+
+    // Fragmentation encodes the whole packet first, so an oversize payload
+    // throws here rather than at send time. Translate it into a typed,
+    // explicitly non-retryable failure so callers do not mistake it for a
+    // transient transport error and spool it.
+    final List<AirGridPacket> fragments;
+    try {
+      fragments = PacketFragmenter.fragment(packet);
+    } on ArgumentError catch (e) {
+      throw _asPacketTooLarge(e);
+    }
+
     for (var index = 0; index < fragments.length; index++) {
       final outgoing = fragments[index];
-      final encoded = TransportCodec.encode(outgoing);
+      final Uint8List encoded;
+      try {
+        encoded = TransportCodec.encode(outgoing);
+      } on ArgumentError catch (e) {
+        throw _asPacketTooLarge(e);
+      }
       Object? lastError;
 
       for (var attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -294,6 +371,24 @@ class AirGridMeshService {
 
   /// Current peer list snapshot.
   List<MeshPeer> get peers => List.unmodifiable(_peers.values);
+
+  /// Stream of public-key changes for already-known node IDs.
+  ///
+  /// A node ID is not cryptographically bound to its key, so this is the only
+  /// signal that the peer behind a familiar name may not be the same device.
+  /// Benign cause: the peer reinstalled and generated a fresh identity key.
+  /// Malicious cause: someone is announcing that node ID with their own key.
+  /// The mesh cannot distinguish them; only out-of-band fingerprint
+  /// comparison can. See [CryptoService.fingerprint].
+  Stream<
+    ({
+      String nodeId,
+      String displayName,
+      String previousPublicKeyBase64,
+      String newPublicKeyBase64,
+    })
+  >
+  get keyChangeStream => _keyChangeController.stream;
 
   /// Stream of all known contacts; emits whenever the set changes.
   Stream<List<KnownContact>> get knownContactsStream =>
@@ -369,7 +464,9 @@ class AirGridMeshService {
   /// handshake is required.
   Future<void> sendPublicAudio(AudioAttachmentPayload audio) async {
     if (!_outboundLimiter.allow()) {
-      throw StateError('Audio rate limited. Please wait before transmitting again.');
+      throw StateError(
+        'Audio rate limited. Please wait before transmitting again.',
+      );
     }
 
     final localNodeId = _identity.nodeId;
@@ -425,6 +522,206 @@ class AirGridMeshService {
   ///
   /// Private messages are sent only to [peer]'s endpoint and are never
   /// rebroadcast, whether encrypted or plaintext.
+  // ── Shared private-send machinery ─────────────────────────────────────────
+  //
+  // The eight sendPrivate* entry points differ only in payload construction
+  // and the local message they emit. Everything else — permission checks,
+  // encryption, target selection, retry, spool and status reporting — is the
+  // same, and used to be copy-pasted eight times. That duplication is why the
+  // oversize-packet bug existed in three places at once. It now lives here.
+
+  /// Permission and rate checks common to every private send.
+  ///
+  /// Returns the result to hand straight back to the caller, or null to
+  /// proceed. Order is deliberate: a specific refusal (blocked, untrusted)
+  /// is more useful to the caller than a generic rate-limit failure.
+  PrivateSendResult? _privateSendPrecheck(String recipientNodeId) {
+    if (_contactStore.isBlocked(recipientNodeId)) {
+      AirGridLogger.log(
+        LogCategory.routing,
+        'Outbound private send blocked: $recipientNodeId is blocked',
+      );
+      return PrivateSendResult.blockedContact;
+    }
+    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
+        !_contactStore.isTrusted(recipientNodeId)) {
+      AirGridLogger.log(
+        LogCategory.routing,
+        'Outbound private send refused: $recipientNodeId is not trusted',
+      );
+      return PrivateSendResult.notTrusted;
+    }
+    if (!_outboundLimiter.allow()) {
+      AirGridLogger.log(
+        LogCategory.routing,
+        'Outbound private send rate limited (retry after '
+        '${_outboundLimiter.retryAfter().inMilliseconds}ms)',
+      );
+      return PrivateSendResult.failed;
+    }
+    return null;
+  }
+
+  /// Encrypts [plain] for [recipientNodeId] when their key is known.
+  ///
+  /// Falls back to plaintext — the caller decides whether that is acceptable.
+  Future<({String wire, bool encrypted, int? version})> _encryptFor(
+    String plain,
+    String recipientNodeId,
+  ) async {
+    if (_cryptoService.hasKey(recipientNodeId)) {
+      final cipher = await _cryptoService.encryptContent(
+        plain,
+        recipientNodeId,
+      );
+      if (cipher != null) {
+        return (wire: cipher, encrypted: true, version: 1);
+      }
+    }
+    return (wire: plain, encrypted: false, version: null);
+  }
+
+  /// Builds a private packet. Payload-specific fields are the caller's job.
+  AirGridPacket _buildPrivatePacket({
+    required String recipientNodeId,
+    required String wireContent,
+    required bool encrypted,
+    required int? encryptionVersion,
+    String packetType = 'chat',
+    String? packetId,
+  }) => AirGridPacket(
+    messageId: packetId ?? const Uuid().v4(),
+    senderNodeId: _identity.nodeId,
+    senderName: _identity.displayName ?? 'Unknown',
+    timestamp: DateTime.now().millisecondsSinceEpoch,
+    content: wireContent,
+    seenByNodes: [_identity.nodeId],
+    hopLimit: AirGridConstants.kHopLimit,
+    packetType: packetType,
+    senderPublicKey: encrypted ? _identity.publicKeyBase64 : null,
+    encryptionVersion: encryptionVersion,
+    conversationType: 'private',
+    recipientNodeId: recipientNodeId,
+  );
+
+  void _emitStatus(String messageId, DeliveryStatus status) =>
+      _statusController.add((messageId: messageId, status: status));
+
+  /// Sends [packet] to a directly connected [peer].
+  ///
+  /// Encrypted packets go to every connected endpoint for crowd relay —
+  /// relays cannot read them — while plaintext goes only to the peer.
+  ///
+  /// [spoolOnFailure] controls what happens when the transport fails: media
+  /// sends retry via other endpoints and then spool for deferred relay, while
+  /// text sends simply report failure.
+  Future<PrivateSendResult> _dispatchToPeer({
+    required AirGridPacket packet,
+    required MeshPeer peer,
+    required bool encrypted,
+    required String statusMessageId,
+    bool spoolOnFailure = false,
+    void Function(double progress)? onProgress,
+  }) async {
+    final targets = encrypted
+        ? _transport.connectedEndpoints.toSet().toList()
+        : [peer.endpointId];
+    if (encrypted && !targets.contains(peer.endpointId)) {
+      targets.add(peer.endpointId);
+    }
+
+    try {
+      await _sendPacketFragments(packet, targets, onProgress: onProgress);
+      AirGridLogger.log(
+        LogCategory.routing,
+        'Sent private ${packet.messageId} to ${peer.endpointId}'
+        '${encrypted ? " [encrypted]" : " [plaintext fallback]"}',
+      );
+      _emitStatus(statusMessageId, DeliveryStatus.sent);
+      return encrypted
+          ? PrivateSendResult.sentEncrypted
+          : PrivateSendResult.sentPlaintext;
+    } on PacketTooLargeException {
+      // Permanent: retrying or spooling can never make this encodable.
+      _emitStatus(statusMessageId, DeliveryStatus.failed);
+      return PrivateSendResult.failed;
+    } catch (_) {
+      if (!encrypted || !spoolOnFailure) {
+        _emitStatus(statusMessageId, DeliveryStatus.failed);
+        return PrivateSendResult.failed;
+      }
+
+      final fallbackTargets = _transport.connectedEndpoints
+          .where((id) => id != peer.endpointId)
+          .toList();
+      if (fallbackTargets.isNotEmpty) {
+        try {
+          await _sendPacketFragments(
+            packet,
+            fallbackTargets,
+            onProgress: onProgress,
+          );
+          _emitStatus(statusMessageId, DeliveryStatus.sent);
+          return PrivateSendResult.sentEncrypted;
+        } on PacketTooLargeException {
+          _emitStatus(statusMessageId, DeliveryStatus.failed);
+          return PrivateSendResult.failed;
+        } catch (_) {
+          // Fall through to the spool for deferred relay.
+        }
+      }
+
+      if (!_spoolPacket(packet)) {
+        _emitStatus(statusMessageId, DeliveryStatus.failed);
+        return PrivateSendResult.failed;
+      }
+      _emitStatus(statusMessageId, DeliveryStatus.sent);
+      return PrivateSendResult.sentEncrypted;
+    }
+  }
+
+  /// Sends [packet] to a known contact that may not be directly connected.
+  ///
+  /// Priority: direct endpoint, then broadcast for crowd relay, then spool.
+  Future<PrivateSendResult> _dispatchToContact({
+    required AirGridPacket packet,
+    required KnownContact contact,
+    required String statusMessageId,
+    void Function(double progress)? onProgress,
+  }) async {
+    final directEndpoint = _endpointToNodeId.entries
+        .where((e) => e.value == contact.nodeId)
+        .map((e) => e.key)
+        .firstOrNull;
+
+    final targets = directEndpoint != null
+        ? [directEndpoint]
+        : _transport.connectedEndpoints.toList();
+
+    if (targets.isEmpty) {
+      if (!_spoolPacket(packet)) {
+        _emitStatus(statusMessageId, DeliveryStatus.failed);
+        return PrivateSendResult.failed;
+      }
+      _emitStatus(statusMessageId, DeliveryStatus.sent);
+      return PrivateSendResult.sentEncrypted;
+    }
+
+    try {
+      await _sendPacketFragments(packet, targets, onProgress: onProgress);
+      AirGridLogger.log(
+        LogCategory.routing,
+        'Sent private ${packet.messageId} to contact ${contact.nodeId}'
+        '${directEndpoint != null ? " [direct]" : " [relay broadcast]"}',
+      );
+      _emitStatus(statusMessageId, DeliveryStatus.sent);
+      return PrivateSendResult.sentEncrypted;
+    } catch (_) {
+      _emitStatus(statusMessageId, DeliveryStatus.failed);
+      return PrivateSendResult.failed;
+    }
+  }
+
   Future<PrivateSendResult> sendPrivateMessage(
     MeshPeer peer,
     String content, {
@@ -439,83 +736,31 @@ class AirGridMeshService {
       );
       return PrivateSendResult.failed;
     }
-
-    // Rate limit outbound user messages
-    if (!_outboundLimiter.allow()) {
-      final retryAfter = _outboundLimiter.retryAfter();
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Outbound private message rate limited (retry after ${retryAfter.inMilliseconds}ms)',
-      );
-      return PrivateSendResult.failed;
-    }
-
     final validatedContent = validation.sanitizedValue!;
 
     final recipientNodeId = peer.nodeId;
     if (recipientNodeId == null) return PrivateSendResult.peerUnavailable;
 
-    // Refuse to send to a blocked contact.
-    if (_contactStore.isBlocked(recipientNodeId)) {
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Outbound private message blocked: $recipientNodeId is blocked',
-      );
-      return PrivateSendResult.blockedContact;
-    }
+    final refusal = _privateSendPrecheck(recipientNodeId);
+    if (refusal != null) return refusal;
 
-    // Refuse to send to a non-trusted contact in trusted-contacts-only mode.
-    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
-        !_contactStore.isTrusted(recipientNodeId)) {
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Outbound private message refused: $recipientNodeId is not trusted',
-      );
-      return PrivateSendResult.notTrusted;
-    }
-
-    final localNodeId = _identity.nodeId;
-    bool encrypted = false;
-    String wireContent = validatedContent;
-    int? encryptionVersion;
-
-    if (_cryptoService.hasKey(recipientNodeId)) {
-      final cipher = await _cryptoService.encryptContent(
-        validatedContent,
-        recipientNodeId,
-      );
-      if (cipher != null) {
-        wireContent = cipher;
-        encrypted = true;
-        encryptionVersion = 1;
-      }
-    }
-
-    if (!encrypted && !allowPlaintextFallback) {
+    final enc = await _encryptFor(validatedContent, recipientNodeId);
+    if (!enc.encrypted && !allowPlaintextFallback) {
       return PrivateSendResult.needsPlaintextConfirmation;
     }
 
-    final packet = AirGridPacket(
-      messageId: const Uuid().v4(),
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: wireContent,
-      seenByNodes: [localNodeId],
-      hopLimit: AirGridConstants.kHopLimit,
-      senderPublicKey: encrypted ? _identity.publicKeyBase64 : null,
-      encryptionVersion: encryptionVersion,
-      conversationType: 'private',
+    final packet = _buildPrivatePacket(
       recipientNodeId: recipientNodeId,
+      wireContent: enc.wire,
+      encrypted: enc.encrypted,
+      encryptionVersion: enc.version,
     );
 
     _messageCache.add(packet.messageId);
-
-    // Emit as pending locally before attempting the transport send.
     _messageController.add(
       AirGridMessage.fromPacket(
         packet.copyWith(content: validatedContent),
-        localNodeId,
+        _identity.nodeId,
         conversationType: 'private',
         peerNodeId: recipientNodeId,
         peerName: peer.displayName,
@@ -523,37 +768,12 @@ class AirGridMeshService {
       ),
     );
 
-    try {
-      final targets = encrypted
-          ? _transport.connectedEndpoints.toSet().toList()
-          : [peer.endpointId];
-      if (encrypted && !targets.contains(peer.endpointId)) {
-        targets.add(peer.endpointId);
-      }
-      for (final outgoing in PacketFragmenter.fragment(packet)) {
-        await _transport.sendToEndpoints(targets, TransportCodec.encode(outgoing));
-      }
-
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Sent private ${packet.messageId} to ${peer.endpointId}'
-        '${encrypted ? " [encrypted]" : " [plaintext fallback]"}',
-      );
-
-      _statusController.add((
-        messageId: packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return encrypted
-          ? PrivateSendResult.sentEncrypted
-          : PrivateSendResult.sentPlaintext;
-    } catch (_) {
-      _statusController.add((
-        messageId: packet.messageId,
-        status: DeliveryStatus.failed,
-      ));
-      return PrivateSendResult.failed;
-    }
+    return _dispatchToPeer(
+      packet: packet,
+      peer: peer,
+      encrypted: enc.encrypted,
+      statusMessageId: packet.messageId,
+    );
   }
 
   /// Broadcast this node's X25519 public key to all connected peers.
@@ -638,7 +858,6 @@ class AirGridMeshService {
     KnownContact contact,
     String content,
   ) async {
-    // Validate content at API boundary
     final validation = MessageContentValidator.validateLocal(content);
     if (!validation.isValid) {
       AirGridLogger.log(
@@ -647,37 +866,10 @@ class AirGridMeshService {
       );
       return PrivateSendResult.failed;
     }
-
-    // Rate limit outbound user messages
-    if (!_outboundLimiter.allow()) {
-      final retryAfter = _outboundLimiter.retryAfter();
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Outbound contact message rate limited (retry after ${retryAfter.inMilliseconds}ms)',
-      );
-      return PrivateSendResult.failed;
-    }
-
-    // Refuse to send to a blocked contact.
-    if (_contactStore.isBlocked(contact.nodeId)) {
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Outbound contact message blocked: ${contact.nodeId} is blocked',
-      );
-      return PrivateSendResult.blockedContact;
-    }
-
-    // Refuse to send to a non-trusted contact in trusted-contacts-only mode.
-    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
-        !_contactStore.isTrusted(contact.nodeId)) {
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Outbound contact message refused: ${contact.nodeId} is not trusted',
-      );
-      return PrivateSendResult.notTrusted;
-    }
-
     final validatedContent = validation.sanitizedValue!;
+
+    final refusal = _privateSendPrecheck(contact.nodeId);
+    if (refusal != null) return refusal;
 
     // Re-cache the key in case the in-memory crypto service was cleared.
     if (!_cryptoService.hasKey(contact.nodeId)) {
@@ -690,19 +882,11 @@ class AirGridMeshService {
     );
     if (cipher == null) return PrivateSendResult.peerUnavailable;
 
-    final localNodeId = _identity.nodeId;
-    final packet = AirGridPacket(
-      messageId: const Uuid().v4(),
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: cipher,
-      seenByNodes: [localNodeId],
-      hopLimit: AirGridConstants.kHopLimit,
-      senderPublicKey: _identity.publicKeyBase64,
-      encryptionVersion: 1,
-      conversationType: 'private',
+    final packet = _buildPrivatePacket(
       recipientNodeId: contact.nodeId,
+      wireContent: cipher,
+      encrypted: true,
+      encryptionVersion: 1,
     );
 
     _messageCache.add(packet.messageId);
@@ -711,7 +895,7 @@ class AirGridMeshService {
     _messageController.add(
       AirGridMessage.fromPacket(
         packet.copyWith(content: validatedContent),
-        localNodeId,
+        _identity.nodeId,
         conversationType: 'private',
         peerNodeId: contact.nodeId,
         peerName: contact.displayName,
@@ -719,46 +903,11 @@ class AirGridMeshService {
       ),
     );
 
-    // Priority 1: send direct if the contact is currently a connected peer.
-    // Priority 2: broadcast to all connected endpoints for crowd relay.
-    // Priority 3: spool if no peers are connected at all.
-    final directEndpoint = _endpointToNodeId.entries
-        .where((e) => e.value == contact.nodeId)
-        .map((e) => e.key)
-        .firstOrNull;
-
-    final targets = directEndpoint != null
-        ? [directEndpoint]
-        : _transport.connectedEndpoints.toList();
-
-    if (targets.isEmpty) {
-      _spoolPacket(packet);
-      _statusController.add((
-        messageId: packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return PrivateSendResult.sentEncrypted;
-    }
-
-    try {
-      await _sendPacketFragments(packet, targets);
-      AirGridLogger.log(
-        LogCategory.routing,
-        'Sent private ${packet.messageId} to contact ${contact.nodeId}'
-        '${directEndpoint != null ? " [direct]" : " [relay broadcast]"}',
-      );
-      _statusController.add((
-        messageId: packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return PrivateSendResult.sentEncrypted;
-    } catch (_) {
-      _statusController.add((
-        messageId: packet.messageId,
-        status: DeliveryStatus.failed,
-      ));
-      return PrivateSendResult.failed;
-    }
+    return _dispatchToContact(
+      packet: packet,
+      contact: contact,
+      statusMessageId: packet.messageId,
+    );
   }
 
   /// Sends a private image to a directly connected [peer].
@@ -773,60 +922,28 @@ class AirGridMeshService {
     final recipientNodeId = peer.nodeId;
     if (recipientNodeId == null) return PrivateSendResult.peerUnavailable;
 
-    if (_contactStore.isBlocked(recipientNodeId)) {
-      return PrivateSendResult.blockedContact;
-    }
+    final refusal = _privateSendPrecheck(recipientNodeId);
+    if (refusal != null) return refusal;
 
-    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
-        !_contactStore.isTrusted(recipientNodeId)) {
-      return PrivateSendResult.notTrusted;
-    }
-
-    if (!_outboundLimiter.allow()) {
-      return PrivateSendResult.failed;
-    }
-
-    var wireContent = image.toWire();
-    var encrypted = false;
-    int? encryptionVersion;
-
-    if (_cryptoService.hasKey(recipientNodeId)) {
-      final cipher = await _cryptoService.encryptContent(
-        wireContent,
-        recipientNodeId,
-      );
-      if (cipher != null) {
-        wireContent = cipher;
-        encrypted = true;
-        encryptionVersion = 1;
-      }
-    }
-
-    if (!encrypted && !allowPlaintextFallback) {
+    final enc = await _encryptFor(image.toWire(), recipientNodeId);
+    if (!enc.encrypted && !allowPlaintextFallback) {
       return PrivateSendResult.needsPlaintextConfirmation;
     }
 
-    final localNodeId = _identity.nodeId;
-    final packetMessageId = packetId ?? messageId ?? const Uuid().v4();
-    final packet = AirGridPacket(
-      messageId: packetMessageId,
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: wireContent,
-      seenByNodes: [localNodeId],
-      hopLimit: AirGridConstants.kHopLimit,
-      packetType: 'image',
-      senderPublicKey: encrypted ? _identity.publicKeyBase64 : null,
-      encryptionVersion: encryptionVersion,
-      conversationType: 'private',
+    final packet = _buildPrivatePacket(
       recipientNodeId: recipientNodeId,
+      wireContent: enc.wire,
+      encrypted: enc.encrypted,
+      encryptionVersion: enc.version,
+      packetType: 'image',
+      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
     _rememberReceiptAlias(packet.messageId, messageId);
 
     if (emitLocalMessage) {
+      final localNodeId = _identity.nodeId;
       _messageController.add(
         AirGridMessage.fromPacket(
           packet.copyWith(content: '[photo]'),
@@ -847,77 +964,27 @@ class AirGridMeshService {
       );
     }
 
-    try {
-      final targets = encrypted
-          ? _transport.connectedEndpoints.toSet().toList()
-          : [peer.endpointId];
-      if (encrypted && !targets.contains(peer.endpointId)) {
-        targets.add(peer.endpointId);
-      }
-      await _sendPacketFragments(packet, targets);
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return encrypted
-          ? PrivateSendResult.sentEncrypted
-          : PrivateSendResult.sentPlaintext;
-    } catch (_) {
-      if (encrypted) {
-        final fallbackTargets = _transport.connectedEndpoints
-            .where((id) => id != peer.endpointId)
-            .toList();
-
-        if (fallbackTargets.isNotEmpty) {
-          try {
-            await _sendPacketFragments(packet, fallbackTargets);
-            _statusController.add((
-              messageId: messageId ?? packet.messageId,
-              status: DeliveryStatus.sent,
-            ));
-            return PrivateSendResult.sentEncrypted;
-          } catch (_) {
-            // Fall through to spool for deferred relay when immediate fallback fails.
-          }
-        }
-
-        _spoolPacket(packet);
-        _statusController.add((
-          messageId: messageId ?? packet.messageId,
-          status: DeliveryStatus.sent,
-        ));
-        return PrivateSendResult.sentEncrypted;
-      }
-
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.failed,
-      ));
-      return PrivateSendResult.failed;
-    }
+    return _dispatchToPeer(
+      packet: packet,
+      peer: peer,
+      encrypted: enc.encrypted,
+      statusMessageId: messageId ?? packet.messageId,
+      spoolOnFailure: true,
+    );
   }
 
   /// Sends a private image to a known contact; supports relay/spool flow.
   Future<PrivateSendResult> sendPrivateImageToContact(
     KnownContact contact,
-    ImageAttachmentPayload image,
-    {
+    ImageAttachmentPayload image, {
     String? messageId,
     String? packetId,
     bool emitLocalMessage = true,
-  }
-  ) async {
-    if (_contactStore.isBlocked(contact.nodeId)) {
-      return PrivateSendResult.blockedContact;
-    }
-    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
-        !_contactStore.isTrusted(contact.nodeId)) {
-      return PrivateSendResult.notTrusted;
-    }
-    if (!_outboundLimiter.allow()) {
-      return PrivateSendResult.failed;
-    }
+  }) async {
+    final refusal = _privateSendPrecheck(contact.nodeId);
+    if (refusal != null) return refusal;
 
+    // Re-cache the key in case the in-memory crypto service was cleared.
     if (!_cryptoService.hasKey(contact.nodeId)) {
       _cryptoService.cacheKey(contact.nodeId, contact.publicKeyBase64);
     }
@@ -928,27 +995,20 @@ class AirGridMeshService {
     );
     if (cipher == null) return PrivateSendResult.peerUnavailable;
 
-    final localNodeId = _identity.nodeId;
-    final packetMessageId = packetId ?? messageId ?? const Uuid().v4();
-    final packet = AirGridPacket(
-      messageId: packetMessageId,
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: cipher,
-      seenByNodes: [localNodeId],
-      hopLimit: AirGridConstants.kHopLimit,
-      packetType: 'image',
-      senderPublicKey: _identity.publicKeyBase64,
-      encryptionVersion: 1,
-      conversationType: 'private',
+    final packet = _buildPrivatePacket(
       recipientNodeId: contact.nodeId,
+      wireContent: cipher,
+      encrypted: true,
+      encryptionVersion: 1,
+      packetType: 'image',
+      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
     _rememberReceiptAlias(packet.messageId, messageId);
 
     if (emitLocalMessage) {
+      final localNodeId = _identity.nodeId;
       _messageController.add(
         AirGridMessage.fromPacket(
           packet.copyWith(content: '[photo]'),
@@ -969,38 +1029,11 @@ class AirGridMeshService {
       );
     }
 
-    final directEndpoint = _endpointToNodeId.entries
-        .where((e) => e.value == contact.nodeId)
-        .map((e) => e.key)
-        .firstOrNull;
-
-    final targets = directEndpoint != null
-        ? [directEndpoint]
-        : _transport.connectedEndpoints.toList();
-
-    if (targets.isEmpty) {
-      _spoolPacket(packet);
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return PrivateSendResult.sentEncrypted;
-    }
-
-    try {
-      await _sendPacketFragments(packet, targets);
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return PrivateSendResult.sentEncrypted;
-    } catch (_) {
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.failed,
-      ));
-      return PrivateSendResult.failed;
-    }
+    return _dispatchToContact(
+      packet: packet,
+      contact: contact,
+      statusMessageId: messageId ?? packet.messageId,
+    );
   }
 
   /// Sends a private voice note to a directly connected [peer].
@@ -1015,60 +1048,28 @@ class AirGridMeshService {
     final recipientNodeId = peer.nodeId;
     if (recipientNodeId == null) return PrivateSendResult.peerUnavailable;
 
-    if (_contactStore.isBlocked(recipientNodeId)) {
-      return PrivateSendResult.blockedContact;
-    }
+    final refusal = _privateSendPrecheck(recipientNodeId);
+    if (refusal != null) return refusal;
 
-    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
-        !_contactStore.isTrusted(recipientNodeId)) {
-      return PrivateSendResult.notTrusted;
-    }
-
-    if (!_outboundLimiter.allow()) {
-      return PrivateSendResult.failed;
-    }
-
-    var wireContent = audio.toWire();
-    var encrypted = false;
-    int? encryptionVersion;
-
-    if (_cryptoService.hasKey(recipientNodeId)) {
-      final cipher = await _cryptoService.encryptContent(
-        wireContent,
-        recipientNodeId,
-      );
-      if (cipher != null) {
-        wireContent = cipher;
-        encrypted = true;
-        encryptionVersion = 1;
-      }
-    }
-
-    if (!encrypted && !allowPlaintextFallback) {
+    final enc = await _encryptFor(audio.toWire(), recipientNodeId);
+    if (!enc.encrypted && !allowPlaintextFallback) {
       return PrivateSendResult.needsPlaintextConfirmation;
     }
 
-    final localNodeId = _identity.nodeId;
-    final packetMessageId = packetId ?? messageId ?? const Uuid().v4();
-    final packet = AirGridPacket(
-      messageId: packetMessageId,
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: wireContent,
-      seenByNodes: [localNodeId],
-      hopLimit: AirGridConstants.kHopLimit,
-      packetType: 'audio',
-      senderPublicKey: encrypted ? _identity.publicKeyBase64 : null,
-      encryptionVersion: encryptionVersion,
-      conversationType: 'private',
+    final packet = _buildPrivatePacket(
       recipientNodeId: recipientNodeId,
+      wireContent: enc.wire,
+      encrypted: enc.encrypted,
+      encryptionVersion: enc.version,
+      packetType: 'audio',
+      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
     _rememberReceiptAlias(packet.messageId, messageId);
 
     if (emitLocalMessage) {
+      final localNodeId = _identity.nodeId;
       final audioContent = audio.source == AudioAttachmentPayload.sourceWalkie
           ? '[walkie]'
           : '[voice]';
@@ -1090,77 +1091,27 @@ class AirGridMeshService {
       );
     }
 
-    try {
-      final targets = encrypted
-          ? _transport.connectedEndpoints.toSet().toList()
-          : [peer.endpointId];
-      if (encrypted && !targets.contains(peer.endpointId)) {
-        targets.add(peer.endpointId);
-      }
-      await _sendPacketFragments(packet, targets);
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return encrypted
-          ? PrivateSendResult.sentEncrypted
-          : PrivateSendResult.sentPlaintext;
-    } catch (_) {
-      if (encrypted) {
-        final fallbackTargets = _transport.connectedEndpoints
-            .where((id) => id != peer.endpointId)
-            .toList();
-
-        if (fallbackTargets.isNotEmpty) {
-          try {
-            await _sendPacketFragments(packet, fallbackTargets);
-            _statusController.add((
-              messageId: messageId ?? packet.messageId,
-              status: DeliveryStatus.sent,
-            ));
-            return PrivateSendResult.sentEncrypted;
-          } catch (_) {
-            // Fall through to spool for deferred relay when immediate fallback fails.
-          }
-        }
-
-        _spoolPacket(packet);
-        _statusController.add((
-          messageId: messageId ?? packet.messageId,
-          status: DeliveryStatus.sent,
-        ));
-        return PrivateSendResult.sentEncrypted;
-      }
-
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.failed,
-      ));
-      return PrivateSendResult.failed;
-    }
+    return _dispatchToPeer(
+      packet: packet,
+      peer: peer,
+      encrypted: enc.encrypted,
+      statusMessageId: messageId ?? packet.messageId,
+      spoolOnFailure: true,
+    );
   }
 
   /// Sends a private voice note to a known contact; supports relay/spool flow.
   Future<PrivateSendResult> sendPrivateAudioToContact(
     KnownContact contact,
-    AudioAttachmentPayload audio,
-    {
+    AudioAttachmentPayload audio, {
     String? messageId,
     String? packetId,
     bool emitLocalMessage = true,
-  }
-  ) async {
-    if (_contactStore.isBlocked(contact.nodeId)) {
-      return PrivateSendResult.blockedContact;
-    }
-    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
-        !_contactStore.isTrusted(contact.nodeId)) {
-      return PrivateSendResult.notTrusted;
-    }
-    if (!_outboundLimiter.allow()) {
-      return PrivateSendResult.failed;
-    }
+  }) async {
+    final refusal = _privateSendPrecheck(contact.nodeId);
+    if (refusal != null) return refusal;
 
+    // Re-cache the key in case the in-memory crypto service was cleared.
     if (!_cryptoService.hasKey(contact.nodeId)) {
       _cryptoService.cacheKey(contact.nodeId, contact.publicKeyBase64);
     }
@@ -1171,27 +1122,20 @@ class AirGridMeshService {
     );
     if (cipher == null) return PrivateSendResult.peerUnavailable;
 
-    final localNodeId = _identity.nodeId;
-    final packetMessageId = packetId ?? messageId ?? const Uuid().v4();
-    final packet = AirGridPacket(
-      messageId: packetMessageId,
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: cipher,
-      seenByNodes: [localNodeId],
-      hopLimit: AirGridConstants.kHopLimit,
-      packetType: 'audio',
-      senderPublicKey: _identity.publicKeyBase64,
-      encryptionVersion: 1,
-      conversationType: 'private',
+    final packet = _buildPrivatePacket(
       recipientNodeId: contact.nodeId,
+      wireContent: cipher,
+      encrypted: true,
+      encryptionVersion: 1,
+      packetType: 'audio',
+      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
     _rememberReceiptAlias(packet.messageId, messageId);
 
     if (emitLocalMessage) {
+      final localNodeId = _identity.nodeId;
       final audioContent = audio.source == AudioAttachmentPayload.sourceWalkie
           ? '[walkie]'
           : '[voice]';
@@ -1213,38 +1157,11 @@ class AirGridMeshService {
       );
     }
 
-    final directEndpoint = _endpointToNodeId.entries
-        .where((e) => e.value == contact.nodeId)
-        .map((e) => e.key)
-        .firstOrNull;
-
-    final targets = directEndpoint != null
-        ? [directEndpoint]
-        : _transport.connectedEndpoints.toList();
-
-    if (targets.isEmpty) {
-      _spoolPacket(packet);
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return PrivateSendResult.sentEncrypted;
-    }
-
-    try {
-      await _sendPacketFragments(packet, targets);
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return PrivateSendResult.sentEncrypted;
-    } catch (_) {
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.failed,
-      ));
-      return PrivateSendResult.failed;
-    }
+    return _dispatchToContact(
+      packet: packet,
+      contact: contact,
+      statusMessageId: messageId ?? packet.messageId,
+    );
   }
 
   Future<PrivateSendResult> sendPrivateFile(
@@ -1259,60 +1176,28 @@ class AirGridMeshService {
     final recipientNodeId = peer.nodeId;
     if (recipientNodeId == null) return PrivateSendResult.peerUnavailable;
 
-    if (_contactStore.isBlocked(recipientNodeId)) {
-      return PrivateSendResult.blockedContact;
-    }
+    final refusal = _privateSendPrecheck(recipientNodeId);
+    if (refusal != null) return refusal;
 
-    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
-        !_contactStore.isTrusted(recipientNodeId)) {
-      return PrivateSendResult.notTrusted;
-    }
-
-    if (!_outboundLimiter.allow()) {
-      return PrivateSendResult.failed;
-    }
-
-    var wireContent = file.toWire();
-    var encrypted = false;
-    int? encryptionVersion;
-
-    if (_cryptoService.hasKey(recipientNodeId)) {
-      final cipher = await _cryptoService.encryptContent(
-        wireContent,
-        recipientNodeId,
-      );
-      if (cipher != null) {
-        wireContent = cipher;
-        encrypted = true;
-        encryptionVersion = 1;
-      }
-    }
-
-    if (!encrypted && !allowPlaintextFallback) {
+    final enc = await _encryptFor(file.toWire(), recipientNodeId);
+    if (!enc.encrypted && !allowPlaintextFallback) {
       return PrivateSendResult.needsPlaintextConfirmation;
     }
 
-    final localNodeId = _identity.nodeId;
-    final packetMessageId = packetId ?? messageId ?? const Uuid().v4();
-    final packet = AirGridPacket(
-      messageId: packetMessageId,
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: wireContent,
-      seenByNodes: [localNodeId],
-      hopLimit: AirGridConstants.kHopLimit,
-      packetType: 'file',
-      senderPublicKey: encrypted ? _identity.publicKeyBase64 : null,
-      encryptionVersion: encryptionVersion,
-      conversationType: 'private',
+    final packet = _buildPrivatePacket(
       recipientNodeId: recipientNodeId,
+      wireContent: enc.wire,
+      encrypted: enc.encrypted,
+      encryptionVersion: enc.version,
+      packetType: 'file',
+      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
     _rememberReceiptAlias(packet.messageId, messageId);
 
     if (emitLocalMessage) {
+      final localNodeId = _identity.nodeId;
       _messageController.add(
         AirGridMessage.fromPacket(
           packet.copyWith(content: '[file]'),
@@ -1330,85 +1215,28 @@ class AirGridMeshService {
       );
     }
 
-    try {
-      final targets = encrypted
-          ? _transport.connectedEndpoints.toSet().toList()
-          : [peer.endpointId];
-      if (encrypted && !targets.contains(peer.endpointId)) {
-        targets.add(peer.endpointId);
-      }
-      await _sendPacketFragments(
-        packet,
-        targets,
-        onProgress: onProgress,
-      );
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return encrypted
-          ? PrivateSendResult.sentEncrypted
-          : PrivateSendResult.sentPlaintext;
-    } catch (_) {
-      if (encrypted) {
-        final fallbackTargets = _transport.connectedEndpoints
-            .where((id) => id != peer.endpointId)
-            .toList();
-
-        if (fallbackTargets.isNotEmpty) {
-          try {
-            await _sendPacketFragments(
-              packet,
-              fallbackTargets,
-              onProgress: onProgress,
-            );
-            _statusController.add((
-              messageId: messageId ?? packet.messageId,
-              status: DeliveryStatus.sent,
-            ));
-            return PrivateSendResult.sentEncrypted;
-          } catch (_) {
-            // Fall through to spool for deferred relay when immediate fallback fails.
-          }
-        }
-
-        _spoolPacket(packet);
-        _statusController.add((
-          messageId: messageId ?? packet.messageId,
-          status: DeliveryStatus.sent,
-        ));
-        return PrivateSendResult.sentEncrypted;
-      }
-
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.failed,
-      ));
-      return PrivateSendResult.failed;
-    }
+    return _dispatchToPeer(
+      packet: packet,
+      peer: peer,
+      encrypted: enc.encrypted,
+      statusMessageId: messageId ?? packet.messageId,
+      spoolOnFailure: true,
+      onProgress: onProgress,
+    );
   }
 
   Future<PrivateSendResult> sendPrivateFileToContact(
     KnownContact contact,
-    FileAttachmentPayload file,
-    {
-      String? messageId,
-      String? packetId,
-      bool emitLocalMessage = true,
-      void Function(double progress)? onProgress,
-    }
-  ) async {
-    if (_contactStore.isBlocked(contact.nodeId)) {
-      return PrivateSendResult.blockedContact;
-    }
-    if (_privacyStore.currentMode == PrivacyMode.trustedContactsOnly &&
-        !_contactStore.isTrusted(contact.nodeId)) {
-      return PrivateSendResult.notTrusted;
-    }
-    if (!_outboundLimiter.allow()) {
-      return PrivateSendResult.failed;
-    }
+    FileAttachmentPayload file, {
+    String? messageId,
+    String? packetId,
+    bool emitLocalMessage = true,
+    void Function(double progress)? onProgress,
+  }) async {
+    final refusal = _privateSendPrecheck(contact.nodeId);
+    if (refusal != null) return refusal;
 
+    // Re-cache the key in case the in-memory crypto service was cleared.
     if (!_cryptoService.hasKey(contact.nodeId)) {
       _cryptoService.cacheKey(contact.nodeId, contact.publicKeyBase64);
     }
@@ -1419,27 +1247,20 @@ class AirGridMeshService {
     );
     if (cipher == null) return PrivateSendResult.peerUnavailable;
 
-    final localNodeId = _identity.nodeId;
-    final packetMessageId = packetId ?? messageId ?? const Uuid().v4();
-    final packet = AirGridPacket(
-      messageId: packetMessageId,
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: cipher,
-      seenByNodes: [localNodeId],
-      hopLimit: AirGridConstants.kHopLimit,
-      packetType: 'file',
-      senderPublicKey: _identity.publicKeyBase64,
-      encryptionVersion: 1,
-      conversationType: 'private',
+    final packet = _buildPrivatePacket(
       recipientNodeId: contact.nodeId,
+      wireContent: cipher,
+      encrypted: true,
+      encryptionVersion: 1,
+      packetType: 'file',
+      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
     _rememberReceiptAlias(packet.messageId, messageId);
 
     if (emitLocalMessage) {
+      final localNodeId = _identity.nodeId;
       _messageController.add(
         AirGridMessage.fromPacket(
           packet.copyWith(content: '[file]'),
@@ -1457,42 +1278,12 @@ class AirGridMeshService {
       );
     }
 
-    final directEndpoint = _endpointToNodeId.entries
-        .where((e) => e.value == contact.nodeId)
-        .map((e) => e.key)
-        .firstOrNull;
-
-    final targets = directEndpoint != null
-        ? [directEndpoint]
-        : _transport.connectedEndpoints.toList();
-
-    if (targets.isEmpty) {
-      _spoolPacket(packet);
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return PrivateSendResult.sentEncrypted;
-    }
-
-    try {
-      await _sendPacketFragments(
-        packet,
-        targets,
-        onProgress: onProgress,
-      );
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.sent,
-      ));
-      return PrivateSendResult.sentEncrypted;
-    } catch (_) {
-      _statusController.add((
-        messageId: messageId ?? packet.messageId,
-        status: DeliveryStatus.failed,
-      ));
-      return PrivateSendResult.failed;
-    }
+    return _dispatchToContact(
+      packet: packet,
+      contact: contact,
+      statusMessageId: messageId ?? packet.messageId,
+      onProgress: onProgress,
+    );
   }
 
   Future<void> dispose() async {
@@ -1502,6 +1293,7 @@ class AirGridMeshService {
     await _peerController.close();
     await _locationController.close();
     await _statusController.close();
+    await _keyChangeController.close();
     await _contactStore.dispose();
   }
 
@@ -1588,7 +1380,9 @@ class AirGridMeshService {
     // Reassembled packets (fromAssembly=true) are synthetic: their underlying
     // fragments were already received, so double-counting them is wrong.
     final isFragment = packet.packetType == 'fragment';
-    if (!fromAssembly && !isFragment && !_inboundLimiters.allow(fromEndpointId)) {
+    if (!fromAssembly &&
+        !isFragment &&
+        !_inboundLimiters.allow(fromEndpointId)) {
       final retryAfter = _inboundLimiters.retryAfter(fromEndpointId);
       AirGridLogger.log(
         LogCategory.routing,
@@ -1624,7 +1418,10 @@ class AirGridMeshService {
     }
 
     // -- Gate 1b: Validate remote display name ---------------------------
-    final nameValidation = DisplayNameValidator.validateRemote(
+    // Optional, not lax: a malformed name is still rejected, but an absent
+    // one is accepted so senders can stop leaking it. See
+    // DisplayNameValidator.validateRemoteOptional for the rollout plan.
+    final nameValidation = DisplayNameValidator.validateRemoteOptional(
       packet.senderName,
     );
     if (!nameValidation.isValid) {
@@ -1642,10 +1439,10 @@ class AirGridMeshService {
         packet.packetType != 'fragment' &&
         packet.packetType != 'delivery_receipt' &&
         packet.packetType != 'read_receipt' &&
-      packet.packetType != 'location_update' &&
-      packet.packetType != 'image' &&
-      packet.packetType != 'audio' &&
-      packet.packetType != 'file') {
+        packet.packetType != 'location_update' &&
+        packet.packetType != 'image' &&
+        packet.packetType != 'audio' &&
+        packet.packetType != 'file') {
       final contentValidation = MessageContentValidator.validateRemote(
         packet.content,
       );
@@ -1690,10 +1487,10 @@ class AirGridMeshService {
     // -- Gate 3c: trusted-contacts-only mode --------------------------------
     // key_announce is always allowed so unknown nodes can be learned before
     // the user decides to trust them. Chat and location are gated.
-        if ((packet.packetType == 'chat' ||
-          packet.packetType == 'image' ||
-          packet.packetType == 'audio' ||
-          packet.packetType == 'file' ||
+    if ((packet.packetType == 'chat' ||
+            packet.packetType == 'image' ||
+            packet.packetType == 'audio' ||
+            packet.packetType == 'file' ||
             packet.packetType == 'location_update') &&
         !_shouldAcceptFromNode(packet.senderNodeId)) {
       AirGridLogger.log(
@@ -1808,7 +1605,7 @@ class AirGridMeshService {
               localNodeId,
               conversationType: packet.conversationType,
               peerNodeId: isPrivate ? packet.senderNodeId : null,
-              peerName: isPrivate ? packet.senderName : null,
+              peerName: isPrivate ? _displayNameFor(packet) : null,
             ),
           );
         }
@@ -1825,7 +1622,7 @@ class AirGridMeshService {
             localNodeId,
             conversationType: packet.conversationType,
             peerNodeId: isPrivate ? packet.senderNodeId : null,
-            peerName: isPrivate ? packet.senderName : null,
+            peerName: isPrivate ? _displayNameFor(packet) : null,
           ),
         );
         AirGridLogger.log(
@@ -1873,7 +1670,7 @@ class AirGridMeshService {
           localNodeId,
           conversationType: packet.conversationType,
           peerNodeId: isPrivate ? packet.senderNodeId : null,
-          peerName: isPrivate ? packet.senderName : null,
+          peerName: isPrivate ? _displayNameFor(packet) : null,
         ),
       );
     }
@@ -2025,7 +1822,7 @@ class AirGridMeshService {
       localNodeId,
       conversationType: packet.conversationType,
       peerNodeId: isPrivate ? packet.senderNodeId : null,
-      peerName: isPrivate ? packet.senderName : null,
+      peerName: isPrivate ? _displayNameFor(packet) : null,
       messageKind: 'image',
       mediaMimeType: payload.mimeType,
       mediaByteLength: payload.byteLength,
@@ -2075,7 +1872,7 @@ class AirGridMeshService {
       localNodeId,
       conversationType: packet.conversationType,
       peerNodeId: isPrivate ? packet.senderNodeId : null,
-      peerName: isPrivate ? packet.senderName : null,
+      peerName: isPrivate ? _displayNameFor(packet) : null,
       messageKind: 'audio',
       mediaMimeType: payload.mimeType,
       mediaByteLength: payload.byteLength,
@@ -2091,8 +1888,28 @@ class AirGridMeshService {
     String wireContent, {
     required bool isPrivate,
   }) async {
+    // Bound the decode before allocating, mirroring the photo and voice-note
+    // paths. Remote input is untrusted: reject, do not sanitise.
+    if (wireContent.length > AirGridConstants.kPrivateFileMaxWireBytes) {
+      AirGridLogger.log(
+        LogCategory.validation,
+        'File envelope rejected: ${wireContent.length} bytes exceeds '
+        'kPrivateFileMaxWireBytes',
+      );
+      return null;
+    }
+
     final payload = FileAttachmentPayload.fromWire(wireContent);
     if (payload == null) {
+      return null;
+    }
+
+    if (payload.byteLength > AirGridConstants.kPrivateFileMaxBytes) {
+      AirGridLogger.log(
+        LogCategory.validation,
+        'File rejected: ${payload.byteLength} bytes exceeds '
+        'kPrivateFileMaxBytes',
+      );
       return null;
     }
 
@@ -2112,7 +1929,7 @@ class AirGridMeshService {
       localNodeId,
       conversationType: packet.conversationType,
       peerNodeId: isPrivate ? packet.senderNodeId : null,
-      peerName: isPrivate ? packet.senderName : null,
+      peerName: isPrivate ? _displayNameFor(packet) : null,
       messageKind: 'file',
       mediaMimeType: payload.mimeType,
       mediaByteLength: payload.byteLength,
@@ -2350,9 +2167,25 @@ class AirGridMeshService {
   ///
   /// Enforces [AirGridConstants.kSpoolMaxEntries] capacity and prunes any
   /// expired entries before inserting.
-  void _spoolPacket(AirGridPacket packet) {
+  /// Returns true when the packet was accepted into the spool.
+  ///
+  /// Returns false for packets that can never be delivered — currently only
+  /// packets too large to encode. Callers that report delivery status must
+  /// not claim success when this returns false.
+  bool _spoolPacket(AirGridPacket packet) {
     final rid = packet.recipientNodeId!;
     final ttl = const Duration(seconds: AirGridConstants.kSpoolTtlSeconds);
+
+    // Backstop: never admit a packet the codec will reject. Spooling one
+    // guarantees a retry loop that can never drain, because every flush
+    // re-encodes and re-throws.
+    if (!_isEncodable(packet)) {
+      AirGridLogger.log(
+        LogCategory.routing,
+        '${packet.messageId} not spooled: exceeds kMaxPacketBytes',
+      );
+      return false;
+    }
 
     // Prune expired entries across all recipients before inserting.
     for (final entries in _spool.values) {
@@ -2368,7 +2201,7 @@ class AirGridMeshService {
         '${packet.messageId} dropped: spool at capacity '
         '(${AirGridConstants.kSpoolMaxEntries})',
       );
-      return;
+      return false;
     }
 
     _spool
@@ -2387,6 +2220,21 @@ class AirGridMeshService {
         .firstOrNull;
     if (endpointId != null) {
       unawaited(_flushSpool(rid, preferredEndpointId: endpointId));
+    }
+    return true;
+  }
+
+  /// Whether [packet] can be serialised within
+  /// [AirGridConstants.kMaxPacketBytes].
+  ///
+  /// Fragmentation encodes the whole packet before splitting, so an oversize
+  /// packet is undeliverable regardless of the fragment threshold.
+  bool _isEncodable(AirGridPacket packet) {
+    try {
+      TransportCodec.encode(packet);
+      return true;
+    } on ArgumentError {
+      return false;
     }
   }
 
@@ -2408,7 +2256,8 @@ class AirGridMeshService {
         .toList();
     final targets = <String>[];
 
-    if (preferredEndpointId != null && connected.contains(preferredEndpointId)) {
+    if (preferredEndpointId != null &&
+        connected.contains(preferredEndpointId)) {
       targets.add(preferredEndpointId);
     }
     for (final id in mappedEndpoints) {
@@ -2512,6 +2361,33 @@ class AirGridMeshService {
 
     if (!isDuplicate) {
       _keyAnnounceCache.add(cacheKey);
+    }
+
+    // Trust-on-first-use: if we have seen a different key for this node id
+    // before, say so. A node id is not cryptographically bound to its key, so
+    // a changed key is exactly what both a reinstall and an impersonation
+    // attempt look like from here. We cannot tell them apart, so we accept
+    // the new key (blocking would break every legitimate reinstall) and
+    // surface the change for the user to judge.
+    final previous = _contactStore.contacts.cast<KnownContact?>().firstWhere(
+      (c) => c?.nodeId == packet.senderNodeId,
+      orElse: () => null,
+    );
+    final previousKey = previous?.publicKeyBase64;
+    if (previousKey != null &&
+        previousKey.isNotEmpty &&
+        previousKey != publicKeyB64) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Key change for ${packet.senderNodeId}: previously pinned key no '
+        'longer matches. Accepting new key; flagging for user verification.',
+      );
+      _keyChangeController.add((
+        nodeId: packet.senderNodeId,
+        displayName: packet.senderName,
+        previousPublicKeyBase64: previousKey,
+        newPublicKeyBase64: publicKeyB64,
+      ));
     }
 
     // Cache the public key for future opportunistic encryption.

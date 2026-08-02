@@ -58,10 +58,20 @@ class AirGridConstants {
   static const int kPrivateVoiceNoteMaxWireBytes = 280 * 1024;
 
   /// Maximum file attachment bytes accepted for private sends.
-  static const int kPrivateFileMaxBytes = 5 * 1024 * 1024;
+  ///
+  /// Derived from [kMaxPacketBytes], not chosen independently. A private file
+  /// is base64-encoded twice before the codec sees it — once into the JSON
+  /// envelope and once by [CryptoService.encryptContent] — so the raw byte
+  /// budget is roughly `kMaxPacketBytes / (4/3)^2`, minus envelope and AEAD
+  /// overhead. At 4 MiB the worst-case packet content is ~7.1 MiB, inside the
+  /// 8 MiB ceiling. Raising this without raising [kMaxPacketBytes] makes
+  /// files unsendable; `mesh_service_oversize_file_test.dart` pins the
+  /// invariant.
+  static const int kPrivateFileMaxBytes = 4 * 1024 * 1024;
 
   /// Maximum in-flight file envelope bytes before rejecting decode.
-  static const int kPrivateFileMaxWireBytes = 7 * 1024 * 1024;
+  /// Sized above the base64-expanded [kPrivateFileMaxBytes] (~5.4 MiB).
+  static const int kPrivateFileMaxWireBytes = 6 * 1024 * 1024;
 
   /// Minimum duration for a valid voice note.
   static const Duration kPrivateVoiceNoteMinDuration = Duration(seconds: 1);
