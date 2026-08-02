@@ -152,6 +152,7 @@ class ChatController extends Notifier<ChatState> {
   StreamSubscription<void>? _foregroundExitSub;
   AudioPlayer? _publicWalkiePlayer;
   bool _isStarting = false;
+  bool _isStopping = false;
   bool _isDisposed = false;
   int _foregroundCriticalActions = 0;
   bool _batterySettingLoaded = false;
@@ -766,6 +767,20 @@ class ChatController extends Notifier<ChatState> {
   }
 
   Future<void> stopMesh() async {
+    // Reentrancy guard. The foreground-service exit request, the pending-exit
+    // action consumed by [startMesh], and direct UI teardown can all land at
+    // once; without this each one ran a full teardown, so a single stop issued
+    // three `_transport.stop()` and three `stopMeshService()` calls.
+    if (_isStopping) return;
+    _isStopping = true;
+    try {
+      await _stopMeshInternal();
+    } finally {
+      _isStopping = false;
+    }
+  }
+
+  Future<void> _stopMeshInternal() async {
     _isStarting = false;
     _connectedPeerEndpoints = {};
     await _messageSub?.cancel();
