@@ -28,49 +28,15 @@ import 'package:airgrid/domain/models/peer_location.dart';
 import 'package:airgrid/domain/models/privacy_mode.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/domain/services/transport_service.dart';
+import 'package:airgrid/features/chat/automatic_image_retry_controller.dart';
 import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
+import 'package:airgrid/features/chat/walkie_session_controller.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:uuid/uuid.dart';
-
-const _walkieControlKind = 'walkie_control';
-const _walkieControlActionInvite = 'invite';
-const _walkieControlActionAccept = 'accept';
-const _walkieControlActionDecline = 'decline';
-const _walkieControlActionCancel = 'cancel';
-const _walkieControlActionEnd = 'end';
-
-class _WalkieControlMessage {
-  final String action;
-  final String sessionId;
-
-  const _WalkieControlMessage({required this.action, required this.sessionId});
-
-  String toWire() => jsonEncode({
-    'kind': _walkieControlKind,
-    'action': action,
-    'sessionId': sessionId,
-  });
-
-  static _WalkieControlMessage? fromContent(String content) {
-    try {
-      final decoded = jsonDecode(content);
-      if (decoded is! Map<String, dynamic>) return null;
-      if (decoded['kind'] != _walkieControlKind) return null;
-      final action = decoded['action'] as String?;
-      final sessionId = decoded['sessionId'] as String?;
-      if (action == null || sessionId == null || sessionId.isEmpty) {
-        return null;
-      }
-      return _WalkieControlMessage(action: action, sessionId: sessionId);
-    } catch (_) {
-      return null;
-    }
-  }
-}
 
 // ── Providers ──────────────────────────────────────────────────────────────
 
@@ -120,7 +86,7 @@ final privacySettingsStoreProvider = Provider<PrivacySettingsStore>(
 
 /// Override in main.dart after [SharedPrefsPublicWalkieSettingsStore.create()] completes.
 final publicWalkieSettingsStoreProvider = Provider<PublicWalkieSettingsStore>(
-  (ref) => throw UnimplementedError(),
+  (ref) => InMemoryPublicWalkieSettingsStore(),
 );
 
 final batterySettingsStoreProvider = Provider<BatterySettingsStore>(
@@ -158,24 +124,6 @@ const _locationUpdateMinInterval = Duration(seconds: 45);
 const _locationUpdateDistanceFilterMeters = 25;
 const _locationAccuracy = LocationAccuracy.low;
 
-class _AutomaticImageRetryState {
-  _AutomaticImageRetryState({
-    this.attempts = 0,
-    this.inFlight = false,
-    this.timer,
-  });
-
-  int attempts;
-  bool inFlight;
-  Timer? timer;
-
-  void cancel() {
-    timer?.cancel();
-    timer = null;
-    inFlight = false;
-  }
-}
-
 class ChatController extends Notifier<ChatState> {
   static Duration automaticImageAckTimeout = const Duration(seconds: 12);
   static Duration automaticImageRetryBackoff = const Duration(seconds: 4);
@@ -210,12 +158,46 @@ class ChatController extends Notifier<ChatState> {
   bool _batterySettingLoaded = false;
   bool _publicWalkieSettingLoaded = false;
   bool _stoppedByBatteryOptimization = false;
+  bool _lastPublishedWalkieAvailability = false;
   DateTime? _lastLocationPublishAt;
 
   /// Endpoint IDs of currently connected peers, tracked to detect new joins.
   var _connectedPeerEndpoints = <String>{};
   Timer? _pruneTimer;
-  final Map<String, _AutomaticImageRetryState> _automaticImageRetries = {};
+
+  AutomaticImageRetryController get _automaticImageRetry =>
+      _automaticImageRetryController ??= AutomaticImageRetryController(
+        isDisposed: () => _isDisposed,
+        messageById: _messageById,
+        forceStatusUpdate: _forceStatusUpdate,
+        retryAttempt: (message) async {
+          final result = await _retryImageMessageInternal(
+            message,
+            markFailedOnTerminal: false,
+          );
+          return result == PrivateSendResult.sentEncrypted ||
+              result == PrivateSendResult.sentPlaintext;
+        },
+        config: () => AutomaticImageRetryConfig(
+          ackTimeout: automaticImageAckTimeout,
+          backoff: automaticImageRetryBackoff,
+          startupGrace: automaticImageRetryStartupGrace,
+          maxAttempts: automaticImageRetryMaxAttempts,
+        ),
+      );
+
+  AutomaticImageRetryController? _automaticImageRetryController;
+
+  WalkieSessionController get _walkieSession =>
+      _walkieSessionController ??= WalkieSessionController(
+        readState: () => state,
+        writeState: (newState) => state = newState,
+        sendPrivateMessage: sendPrivateMessage,
+        isTrustedNode: (nodeId) => state.trustedNodeIds.contains(nodeId),
+        isWalkieAlwaysOn: (nodeId) => _contactStore.isWalkieAlwaysOn(nodeId),
+      );
+
+  WalkieSessionController? _walkieSessionController;
 
   @override
   ChatState build() {
@@ -258,16 +240,11 @@ class ChatController extends Notifier<ChatState> {
   ChatListPreferencesStore get _chatListPrefs =>
       ref.read(chatListPreferencesStoreProvider);
 
-  // These three run unawaited from [build]. Each `ref.read` after an `await`
-  // is a hazard: if the controller is disposed while the load is in flight,
-  // reading a provider from a disposed container throws. Resolve the store
-  // once up front, then guard the state write.
-
   Future<void> _loadBatteryOptimizationSetting() async {
     if (_batterySettingLoaded) return;
     _batterySettingLoaded = true;
-    final store = _batteryStore;
-    final batteryOptimizationEnabled = await store
+    final batteryStore = _batteryStore;
+    final batteryOptimizationEnabled = await batteryStore
         .getBatteryOptimizationEnabled();
     if (_isDisposed) return;
     state = state.copyWith(
@@ -278,8 +255,8 @@ class ChatController extends Notifier<ChatState> {
   Future<void> _loadPublicWalkieSetting() async {
     if (_publicWalkieSettingLoaded) return;
     _publicWalkieSettingLoaded = true;
-    final store = _publicWalkieStore;
-    final enabled = await store.getStayOnlineEnabled();
+    final publicWalkieStore = _publicWalkieStore;
+    final enabled = await publicWalkieStore.getStayOnlineEnabled();
     if (_isDisposed) return;
     state = state.copyWith(
       walkie: state.walkie.copyWith(publicStayOnline: enabled),
@@ -287,10 +264,10 @@ class ChatController extends Notifier<ChatState> {
   }
 
   Future<void> _loadChatListPreferences() async {
-    final store = _chatListPrefs;
-    final showOnlineOnly = await store.getShowOnlineOnly();
-    final showClosedChats = await store.getShowClosedChats();
-    final showFriendsOnly = await store.getShowFriendsOnly();
+    final chatListPrefs = _chatListPrefs;
+    final showOnlineOnly = await chatListPrefs.getShowOnlineOnly();
+    final showClosedChats = await chatListPrefs.getShowClosedChats();
+    final showFriendsOnly = await chatListPrefs.getShowFriendsOnly();
     if (_isDisposed) return;
     state = state.copyWith(
       showOnlineOnly: showOnlineOnly,
@@ -413,7 +390,6 @@ class ChatController extends Notifier<ChatState> {
             meshStarted: false,
             isAdvertising: false,
             isDiscovering: false,
-            playServicesAvailable: false,
             lastEvent: 'Transport error: ${event.reason}',
           );
         }
@@ -432,7 +408,9 @@ class ChatController extends Notifier<ChatState> {
       );
 
       // Announce our public key to any peers already connected at startup.
-      await _mesh.sendKeyAnnounce();
+      await _mesh.sendKeyAnnounce(
+        extraMeta: {'walkieAvailable': _lastPublishedWalkieAvailability},
+      );
 
       // Load the persisted privacy mode.
       final privacyMode = await _privacyStore.getPrivacyMode();
@@ -442,12 +420,12 @@ class ChatController extends Notifier<ChatState> {
         if (_isWalkieMessage(msg) && msg.isLocal) {
           return;
         }
-        final walkieControl = _WalkieControlMessage.fromContent(msg.content);
+        final walkieControl = WalkieControlMessage.fromContent(msg.content);
         if (walkieControl != null && msg.isLocal) {
           return;
         }
         if (walkieControl != null) {
-          _handleWalkieControlMessage(msg, walkieControl);
+          _walkieSession.handleIncomingControlMessage(msg, walkieControl);
           return;
         }
         // Drop messages from blocked contacts.
@@ -499,10 +477,13 @@ class ChatController extends Notifier<ChatState> {
         }
         // Schedule background/debounced pruning so bursts don't run deletes repeatedly.
         _schedulePrune();
-        if (!isWalkieMessage && _shouldNotifyForPrivateMessage(msg)) {
+        if (!isWalkieMessage &&
+            incomingPrivateNodeId != null &&
+            _shouldNotifyForPrivateMessage(msg)) {
           unawaited(
             _foreground.showPrivateMessageNotification(
-              msg.peerName ?? msg.senderName,
+              peerNodeId: incomingPrivateNodeId,
+              senderName: msg.peerName ?? msg.senderName,
             ),
           );
         }
@@ -572,7 +553,9 @@ class ChatController extends Notifier<ChatState> {
 
         if (hasNewPeers) {
           // Re-announce key whenever a new peer connects so they can cache it.
-          await _mesh.sendKeyAnnounce();
+          await _mesh.sendKeyAnnounce(
+            extraMeta: {'walkieAvailable': _lastPublishedWalkieAvailability},
+          );
         }
 
         // Filter out blocked peers before updating visible state.
@@ -598,11 +581,34 @@ class ChatController extends Notifier<ChatState> {
         final peerLocations = Map<String, PeerLocation>.from(
           state.peerLocations,
         )..removeWhere((nodeId, _) => !activeNodeIds.contains(nodeId));
+        final activeWalkiePeerId = state.walkie.sessionActivePeerNodeId;
+        final inviteWalkiePeerId = state.walkie.invitePeerNodeId;
+        final activeWalkiePeerDisconnected =
+            activeWalkiePeerId != null &&
+            !activeNodeIds.contains(activeWalkiePeerId);
+        final inviteWalkiePeerDisconnected =
+            inviteWalkiePeerId != null &&
+            !activeNodeIds.contains(inviteWalkiePeerId);
+
         state = state.copyWith(
           peers: visiblePeers,
           peerLocations: peerLocations,
           lastEvent: '${visiblePeers.length} peer(s) connected',
           selectedConversation: selectedConversation,
+          walkie: state.walkie.copyWith(
+            clearSessionActivePeerNodeId: activeWalkiePeerDisconnected,
+            clearInvite:
+                activeWalkiePeerDisconnected || inviteWalkiePeerDisconnected,
+            isTransmitting: activeWalkiePeerDisconnected
+                ? false
+                : state.walkie.isTransmitting,
+            isSending: activeWalkiePeerDisconnected
+                ? false
+                : state.walkie.isSending,
+            lastError: activeWalkiePeerDisconnected
+                ? 'Private walkie peer disconnected'
+                : state.walkie.lastError,
+          ),
         );
         final localLocation = state.localLocation;
         if (hasNewPeers &&
@@ -639,7 +645,9 @@ class ChatController extends Notifier<ChatState> {
     if (!state.meshStarted) {
       return;
     }
-    await _mesh.sendKeyAnnounce();
+    await _mesh.sendKeyAnnounce(
+      extraMeta: {'walkieAvailable': _lastPublishedWalkieAvailability},
+    );
   }
 
   Future<void> handleAppLifecycleState(AppLifecycleState lifecycleState) async {
@@ -719,12 +727,18 @@ class ChatController extends Notifier<ChatState> {
     final deadline = DateTime.now().add(timeout);
 
     while (DateTime.now().isBefore(deadline)) {
+      final contact = state.knownContacts.cast<KnownContact?>().firstWhere(
+        (item) => item?.nodeId == nodeId,
+        orElse: () => null,
+      );
       final peerReady = state.peers.any((peer) => peer.nodeId == nodeId);
       final contactReady = state.knownContacts.any(
         (contact) => contact.nodeId == nodeId && contact.isDirectlyConnected,
       );
+      final renamedOrReinstalledPeerReady =
+          contact != null && _hasSingleOnlinePeerNamed(contact.displayName);
 
-      if (peerReady || contactReady) {
+      if (peerReady || contactReady || renamedOrReinstalledPeerReady) {
         await Future<void>.delayed(settleDelay);
         return true;
       }
@@ -736,10 +750,28 @@ class ChatController extends Notifier<ChatState> {
       await Future<void>.delayed(pollInterval);
     }
 
+    final contact = state.knownContacts.cast<KnownContact?>().firstWhere(
+      (item) => item?.nodeId == nodeId,
+      orElse: () => null,
+    );
     return state.peers.any((peer) => peer.nodeId == nodeId) ||
+        (contact != null && _hasSingleOnlinePeerNamed(contact.displayName)) ||
         state.knownContacts.any(
           (contact) => contact.nodeId == nodeId && contact.isDirectlyConnected,
         );
+  }
+
+  bool _hasSingleOnlinePeerNamed(String displayName) {
+    final normalized = displayName.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    return state.peers
+            .where(
+              (peer) =>
+                  peer.nodeId != null &&
+                  peer.displayName.trim().toLowerCase() == normalized,
+            )
+            .length ==
+        1;
   }
 
   Future<void> stopMesh() async {
@@ -781,14 +813,14 @@ class ChatController extends Notifier<ChatState> {
       isDiscovering: false,
       peers: [],
       isLocationSharing: false,
-      clearLocalLocation: true,
-      clearLocationStatus: true,
-      lastEvent: 'Mesh stopped',
       walkie: state.walkie.copyWith(
         isTransmitting: false,
         isSending: false,
         clearLastError: true,
       ),
+      clearLocalLocation: true,
+      clearLocationStatus: true,
+      lastEvent: 'Mesh stopped',
     );
   }
 
@@ -1296,8 +1328,8 @@ class ChatController extends Notifier<ChatState> {
       state = state.copyWith(
         messages: messages,
         selectedConversation: target,
-        unreadPrivateCounts: unread,
         walkie: state.walkie.copyWith(peerNodeId: target.peerNodeId),
+        unreadPrivateCounts: unread,
       );
       unawaited(_repo.markPrivateThreadRead(target.peerNodeId));
       unawaited(_sendReadReceiptsFor(target.peerNodeId));
@@ -1344,188 +1376,23 @@ class ChatController extends Notifier<ChatState> {
   }
 
   Future<bool> sendWalkieInvite(MeshPeer peer) async {
-    final nodeId = peer.nodeId;
-    if (nodeId == null) return false;
-
-    final sessionId = const Uuid().v4();
-    state = state.copyWith(
-      walkie: state.walkie.copyWith(
-        inviteSessionId: sessionId,
-        invitePeerNodeId: nodeId,
-        inviteIsIncoming: false,
-        peerNodeId: nodeId,
-        clearLastError: true,
-      ),
-    );
-
-    final result = await sendPrivateMessage(
-      peer,
-      _WalkieControlMessage(
-        action: _walkieControlActionInvite,
-        sessionId: sessionId,
-      ).toWire(),
-      allowPlaintextFallback: true,
-    );
-
-    if (result == PrivateSendResult.sentEncrypted ||
-        result == PrivateSendResult.sentPlaintext) {
-      return true;
-    }
-
-    state = state.copyWith(
-      walkie: state.walkie.copyWith(
-        lastError: 'Failed to send invite',
-        clearInvite: true,
-        clearSessionActivePeerNodeId: true,
-      ),
-    );
-    return false;
+    return _walkieSession.sendInvite(peer);
   }
 
   Future<bool> acceptWalkieInvite() async {
-    final invitePeerId = state.walkie.invitePeerNodeId;
-    final sessionId = state.walkie.inviteSessionId;
-    if (invitePeerId == null || sessionId == null) return false;
-
-    final peer = state.peers.cast<MeshPeer?>().firstWhere(
-      (item) => item?.nodeId == invitePeerId,
-      orElse: () => null,
-    );
-    if (peer == null) return false;
-
-    final result = await sendPrivateMessage(
-      peer,
-      _WalkieControlMessage(
-        action: _walkieControlActionAccept,
-        sessionId: sessionId,
-      ).toWire(),
-      allowPlaintextFallback: true,
-    );
-
-    if (result != PrivateSendResult.sentEncrypted &&
-        result != PrivateSendResult.sentPlaintext) {
-      state = state.copyWith(
-        walkie: state.walkie.copyWith(lastError: 'Failed to accept invite'),
-      );
-      return false;
-    }
-
-    state = state.copyWith(
-      selectedConversation: PrivateConversation(
-        peerNodeId: invitePeerId,
-        peerName: peer.displayName,
-      ),
-      walkie: state.walkie.copyWith(
-        sessionActivePeerNodeId: invitePeerId,
-        peerNodeId: invitePeerId,
-        clearInvite: true,
-        clearLastError: true,
-      ),
-    );
-    return true;
+    return _walkieSession.acceptInvite();
   }
 
   Future<bool> declineWalkieInvite() async {
-    final invitePeerId = state.walkie.invitePeerNodeId;
-    final sessionId = state.walkie.inviteSessionId;
-    if (invitePeerId == null || sessionId == null) {
-      return false;
-    }
-
-    final peer = state.peers.cast<MeshPeer?>().firstWhere(
-      (item) => item?.nodeId == invitePeerId,
-      orElse: () => null,
-    );
-    if (peer == null) {
-      state = state.copyWith(walkie: state.walkie.copyWith(clearInvite: true));
-      return false;
-    }
-
-    await sendPrivateMessage(
-      peer,
-      _WalkieControlMessage(
-        action: _walkieControlActionDecline,
-        sessionId: sessionId,
-      ).toWire(),
-      allowPlaintextFallback: true,
-    );
-
-    state = state.copyWith(
-      walkie: state.walkie.copyWith(clearInvite: true, clearLastError: true),
-    );
-    return true;
+    return _walkieSession.declineInvite();
   }
 
   Future<bool> cancelWalkieInvite() async {
-    final invitePeerId = state.walkie.invitePeerNodeId;
-    final sessionId = state.walkie.inviteSessionId;
-    if (invitePeerId == null || sessionId == null) return false;
-
-    final peer = state.peers.cast<MeshPeer?>().firstWhere(
-      (item) => item?.nodeId == invitePeerId,
-      orElse: () => null,
-    );
-    if (peer != null) {
-      await sendPrivateMessage(
-        peer,
-        _WalkieControlMessage(
-          action: _walkieControlActionCancel,
-          sessionId: sessionId,
-        ).toWire(),
-        allowPlaintextFallback: true,
-      );
-    }
-
-    state = state.copyWith(
-      walkie: state.walkie.copyWith(
-        clearInvite: true,
-        clearSessionActivePeerNodeId: true,
-        clearLastError: true,
-      ),
-    );
-    return true;
+    return _walkieSession.cancelInvite();
   }
 
   Future<bool> endWalkieSession() async {
-    final activePeerId = state.walkie.sessionActivePeerNodeId;
-    if (activePeerId == null) {
-      state = state.copyWith(
-        walkie: state.walkie.copyWith(
-          clearInvite: true,
-          clearSessionActivePeerNodeId: true,
-        ),
-      );
-      return false;
-    }
-
-    // walkieInviteSessionId is cleared on accept, so fall back to activePeerId
-    // as the session token. The receiver matches on walkieSessionActivePeerNodeId
-    // as well, so the message will always be processed correctly.
-    final sessionId = state.walkie.inviteSessionId ?? activePeerId;
-
-    final peer = state.peers.cast<MeshPeer?>().firstWhere(
-      (item) => item?.nodeId == activePeerId,
-      orElse: () => null,
-    );
-    if (peer != null) {
-      await sendPrivateMessage(
-        peer,
-        _WalkieControlMessage(
-          action: _walkieControlActionEnd,
-          sessionId: sessionId,
-        ).toWire(),
-        allowPlaintextFallback: true,
-      );
-    }
-
-    state = state.copyWith(
-      walkie: state.walkie.copyWith(
-        clearInvite: true,
-        clearSessionActivePeerNodeId: true,
-        clearLastError: true,
-      ),
-    );
-    return true;
+    return _walkieSession.endSession();
   }
 
   Map<String, int> _updatedUnreadCountsFor(AirGridMessage msg) {
@@ -1569,82 +1436,6 @@ class ChatController extends Notifier<ChatState> {
 
   bool _isWalkieMessage(AirGridMessage msg) =>
       msg.messageKind == 'audio' && msg.content == '[walkie]';
-
-  void _handleWalkieControlMessage(
-    AirGridMessage msg,
-    _WalkieControlMessage control,
-  ) {
-    final peerNodeId = msg.peerNodeId ?? msg.senderNodeId;
-    switch (control.action) {
-      case _walkieControlActionInvite:
-        state = state.copyWith(
-          walkie: state.walkie.copyWith(
-            inviteSessionId: control.sessionId,
-            invitePeerNodeId: peerNodeId,
-            inviteIsIncoming: true,
-            peerNodeId: peerNodeId,
-            clearLastError: true,
-          ),
-        );
-        if (state.trustedNodeIds.contains(peerNodeId) &&
-            _contactStore.isWalkieAlwaysOn(peerNodeId)) {
-          unawaited(acceptWalkieInvite());
-        }
-        return;
-      case _walkieControlActionAccept:
-        if (state.walkie.inviteSessionId != control.sessionId &&
-            state.walkie.sessionActivePeerNodeId != peerNodeId) {
-          return;
-        }
-        state = state.copyWith(
-          selectedConversation: PrivateConversation(
-            peerNodeId: peerNodeId,
-            peerName: msg.peerName ?? msg.senderName,
-          ),
-          walkie: state.walkie.copyWith(
-            sessionActivePeerNodeId: peerNodeId,
-            peerNodeId: peerNodeId,
-            clearInvite: true,
-            clearLastError: true,
-          ),
-        );
-        return;
-      case _walkieControlActionDecline:
-      case _walkieControlActionCancel:
-        if (state.walkie.inviteSessionId != control.sessionId &&
-            state.walkie.sessionActivePeerNodeId != peerNodeId) {
-          return;
-        }
-        state = state.copyWith(
-          walkie: state.walkie.copyWith(
-            clearInvite: true,
-            clearSessionActivePeerNodeId: true,
-            isTransmitting: false,
-            isSending: false,
-            clearLastError: true,
-          ),
-        );
-        return;
-      case _walkieControlActionEnd:
-        if (state.walkie.inviteSessionId != control.sessionId &&
-            state.walkie.sessionActivePeerNodeId != peerNodeId) {
-          return;
-        }
-        state = state.copyWith(
-          walkie: state.walkie.copyWith(
-            clearInvite: true,
-            clearSessionActivePeerNodeId: true,
-            isTransmitting: false,
-            isSending: false,
-            lastError:
-                '${msg.peerName ?? msg.senderName} ended the walkie session',
-          ),
-        );
-        return;
-      default:
-        return;
-    }
-  }
 
   Map<String, int> _unreadCountsFromMessages(List<AirGridMessage> messages) {
     final unread = <String, int>{};
@@ -1740,15 +1531,23 @@ class ChatController extends Notifier<ChatState> {
   /// Marks the contact identified by [nodeId] as trusted.
   Future<void> trustContact(String nodeId) async {
     await _contactStore.trust(nodeId);
+    _refreshKnownContactsFromStore();
   }
 
   /// Removes trust for the contact identified by [nodeId].
   Future<void> untrustContact(String nodeId) async {
     await _contactStore.untrust(nodeId);
+    _refreshKnownContactsFromStore();
   }
 
   Future<void> setWalkieAlwaysOn(String nodeId, bool enabled) async {
     await _contactStore.setWalkieAlwaysOn(nodeId, enabled);
+    _refreshKnownContactsFromStore();
+    await publishWalkieAvailability(enabled);
+  }
+
+  void _refreshKnownContactsFromStore() {
+    state = state.copyWith(knownContacts: _contactStore.contacts);
   }
 
   /// Hides [messageId] from the current session view (in-memory only).
@@ -1801,6 +1600,19 @@ class ChatController extends Notifier<ChatState> {
     state = state.copyWith(
       walkie: state.walkie.copyWith(publicStayOnline: enabled),
     );
+    await publishWalkieAvailability(enabled);
+  }
+
+  /// Publishes a presence flag indicating whether this node can receive
+  /// private walkie sessions right now. This is included in key_announce
+  /// metadata so peers can show an appropriate online/away indicator.
+  Future<void> publishWalkieAvailability(bool available) async {
+    _lastPublishedWalkieAvailability = available;
+    try {
+      await _mesh.sendKeyAnnounce(extraMeta: {'walkieAvailable': available});
+    } catch (_) {
+      // Best-effort only.
+    }
   }
 
   Future<void> setShowOnlineOnly(bool enabled) async {
@@ -1942,23 +1754,7 @@ class ChatController extends Notifier<ChatState> {
     String messageId,
     DeliveryStatus newStatus,
   ) {
-    if (newStatus == DeliveryStatus.delivered ||
-        newStatus == DeliveryStatus.read ||
-        newStatus == DeliveryStatus.failed) {
-      _cancelAutomaticImageRetry(messageId);
-      return;
-    }
-
-    if (newStatus != DeliveryStatus.sent) {
-      return;
-    }
-
-    final message = _messageById(messageId);
-    if (message == null) {
-      return;
-    }
-
-    _restoreAutomaticImageRetryWatch(message);
+    _automaticImageRetry.handleStatus(messageId, newStatus);
   }
 
   void _forceStatusUpdate(String messageId, DeliveryStatus newStatus) {
@@ -1986,174 +1782,20 @@ class ChatController extends Notifier<ChatState> {
     return state.messages[idx];
   }
 
-  bool _isAutomaticImageRetryCandidate(AirGridMessage message) {
-    return message.isLocal &&
-        message.conversationType == 'private' &&
-        message.messageKind == 'image' &&
-        message.peerNodeId != null &&
-        (message.deliveryStatus == DeliveryStatus.pending ||
-            message.deliveryStatus == DeliveryStatus.sent);
-  }
-
-  bool _canRestoreAutomaticImageRetryWatch(AirGridMessage message) {
-    if (!_isAutomaticImageRetryCandidate(message)) {
-      return false;
-    }
-
-    final age = DateTime.now().difference(message.timestamp);
-    if (age > automaticImageRetryStartupGrace) {
-      return false;
-    }
-
-    return _hasRecoverableImagePayload(message);
-  }
-
-  bool _hasRecoverableImagePayload(AirGridMessage message) {
-    final tempPath = message.mediaTempPath;
-    if (tempPath != null &&
-        tempPath.isNotEmpty &&
-        File(tempPath).existsSync()) {
-      return true;
-    }
-
-    final preview = message.mediaPreviewBase64;
-    return preview != null && preview.isNotEmpty;
-  }
-
   void _restoreAutomaticImageRetryWatches(Iterable<AirGridMessage> messages) {
-    for (final message in messages) {
-      if (_canRestoreAutomaticImageRetryWatch(message)) {
-        _scheduleAutomaticImageRetry(message.id, resetAttempts: true);
-      }
-    }
+    _automaticImageRetry.restoreWatches(messages);
   }
 
   void _restoreAutomaticImageRetryWatch(AirGridMessage message) {
-    if (_isAutomaticImageRetryCandidate(message)) {
-      _scheduleAutomaticImageRetry(message.id);
-      return;
-    }
-
-    if (message.deliveryStatus == DeliveryStatus.delivered ||
-        message.deliveryStatus == DeliveryStatus.read ||
-        message.deliveryStatus == DeliveryStatus.failed) {
-      _cancelAutomaticImageRetry(message.id);
-    }
-  }
-
-  void _scheduleAutomaticImageRetry(
-    String messageId, {
-    bool resetAttempts = false,
-    Duration? delay,
-  }) {
-    if (_isDisposed) return;
-    final message = _messageById(messageId);
-    if (message == null || !_isAutomaticImageRetryCandidate(message)) {
-      _cancelAutomaticImageRetry(messageId);
-      return;
-    }
-
-    final retryState = _automaticImageRetries.putIfAbsent(
-      messageId,
-      _AutomaticImageRetryState.new,
-    );
-    if (resetAttempts) {
-      retryState.attempts = 0;
-    }
-    retryState.cancel();
-    retryState.timer = Timer(delay ?? automaticImageAckTimeout, () {
-      if (_isDisposed) return;
-      unawaited(_handleAutomaticImageRetryTimeout(messageId));
-    });
-  }
-
-  Future<void> _handleAutomaticImageRetryTimeout(String messageId) async {
-    if (_isDisposed) return;
-    try {
-      final retryState = _automaticImageRetries[messageId];
-      if (retryState == null || retryState.inFlight) {
-        return;
-      }
-
-      final message = _messageById(messageId);
-      if (message == null || !_isAutomaticImageRetryCandidate(message)) {
-        _cancelAutomaticImageRetry(messageId);
-        return;
-      }
-
-      if (!_hasRecoverableImagePayload(message)) {
-        _cancelAutomaticImageRetry(messageId);
-        _forceStatusUpdate(messageId, DeliveryStatus.failed);
-        return;
-      }
-
-      if (retryState.attempts >= automaticImageRetryMaxAttempts) {
-        _cancelAutomaticImageRetry(messageId);
-        _forceStatusUpdate(messageId, DeliveryStatus.failed);
-        return;
-      }
-
-      retryState.inFlight = true;
-      retryState.attempts++;
-
-      final result = await _retryImageMessageInternal(
-        message,
-        markFailedOnTerminal: false,
-      );
-
-      if (_isDisposed) return;
-
-      retryState.inFlight = false;
-      final refreshed = _messageById(messageId);
-      if (refreshed == null) {
-        _cancelAutomaticImageRetry(messageId);
-        return;
-      }
-
-      if (refreshed.deliveryStatus == DeliveryStatus.delivered ||
-          refreshed.deliveryStatus == DeliveryStatus.read ||
-          refreshed.deliveryStatus == DeliveryStatus.failed) {
-        _cancelAutomaticImageRetry(messageId);
-        return;
-      }
-
-      if (result == PrivateSendResult.sentEncrypted ||
-          result == PrivateSendResult.sentPlaintext) {
-        _scheduleAutomaticImageRetry(
-          messageId,
-          delay: automaticImageAckTimeout,
-        );
-        return;
-      }
-
-      if (retryState.attempts >= automaticImageRetryMaxAttempts ||
-          !_hasRecoverableImagePayload(refreshed)) {
-        _cancelAutomaticImageRetry(messageId);
-        _forceStatusUpdate(messageId, DeliveryStatus.failed);
-        return;
-      }
-
-      _scheduleAutomaticImageRetry(
-        messageId,
-        delay: automaticImageRetryBackoff,
-      );
-    } catch (_) {
-      if (_isDisposed) return;
-      _cancelAutomaticImageRetry(messageId);
-      _forceStatusUpdate(messageId, DeliveryStatus.failed);
-    }
+    _automaticImageRetry.restoreWatch(message);
   }
 
   void _cancelAutomaticImageRetry(String messageId) {
-    final retryState = _automaticImageRetries.remove(messageId);
-    retryState?.cancel();
+    _automaticImageRetry.cancel(messageId);
   }
 
   void _cancelAllAutomaticImageRetries() {
-    for (final retryState in _automaticImageRetries.values) {
-      retryState.cancel();
-    }
-    _automaticImageRetries.clear();
+    _automaticImageRetry.cancelAll();
   }
 
   Future<ImageAttachmentPayload?> _rebuildImageAttachment(

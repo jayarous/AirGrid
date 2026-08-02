@@ -6,6 +6,8 @@ import 'dart:ui' as ui;
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/constants.dart';
 import 'package:airgrid/core/ephemeral_media_cache.dart';
+import 'package:airgrid/core/help_provider.dart';
+import 'package:airgrid/core/help_target.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/known_contact.dart';
@@ -14,6 +16,7 @@ import 'package:airgrid/domain/models/media_attachment.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
+import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/chat/message_bubble.dart';
 import 'package:airgrid/features/mesh_status/mesh_status_panel.dart';
@@ -42,6 +45,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     with WidgetsBindingObserver {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
+  late final FocusNode _inputFocusNode;
   final _imagePicker = ImagePicker();
   final _mediaCache = EphemeralMediaCache();
   final _audioRecorder = AudioRecorder();
@@ -57,6 +61,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   @override
   void initState() {
     super.initState();
+    _inputFocusNode = FocusNode();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -66,10 +71,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     unawaited(_mediaCache.cleanup());
   }
 
+  Future<void> _restoreFocus() async {
+    // Restore focus after a short delay to allow the widget tree to stabilize
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    if (!mounted || _isRecordingVoice) return;
+    _inputFocusNode.requestFocus();
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _inputController.dispose();
+    _inputFocusNode.dispose();
     _scrollController.dispose();
     _voiceTicker?.cancel();
     unawaited(_audioRecorder.dispose());
@@ -105,13 +118,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final conv = chatState.selectedConversation;
 
     if (conv is PrivateConversation) {
-      final peers = chatState.peers;
-      final peer = peers.cast<MeshPeer?>().firstWhere(
-        (p) => p?.nodeId == conv.peerNodeId,
-        orElse: () => null,
-      );
+      final peer = _resolvePrivatePeer(chatState, conv);
 
       if (peer != null) {
+        _selectResolvedPeerIfNeeded(conv, peer);
         // Direct peer — allow plaintext fallback after confirmation.
         var result = await ref
             .read(chatControllerProvider.notifier)
@@ -206,6 +216,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         ),
       );
     }
+
+    await _restoreFocus();
+  }
+
+  MeshPeer? _resolvePrivatePeer(ChatState chatState, PrivateConversation conv) {
+    final exact = chatState.peers.cast<MeshPeer?>().firstWhere(
+      (p) => p?.nodeId == conv.peerNodeId,
+      orElse: () => null,
+    );
+    if (exact != null) return exact;
+
+    final contact = chatState.knownContacts.cast<KnownContact?>().firstWhere(
+      (c) => c?.nodeId == conv.peerNodeId,
+      orElse: () => null,
+    );
+    if (contact == null) return null;
+
+    final matchingOnlinePeers = chatState.peers
+        .where(
+          (peer) =>
+              peer.nodeId != null &&
+              peer.displayName.trim().toLowerCase() ==
+                  contact.displayName.trim().toLowerCase(),
+        )
+        .toList();
+    return matchingOnlinePeers.length == 1 ? matchingOnlinePeers.single : null;
+  }
+
+  void _selectResolvedPeerIfNeeded(PrivateConversation conv, MeshPeer peer) {
+    final nodeId = peer.nodeId;
+    if (nodeId == null || nodeId == conv.peerNodeId) return;
+    ref
+        .read(chatControllerProvider.notifier)
+        .selectConversation(
+          PrivateConversation(peerNodeId: nodeId, peerName: peer.displayName),
+        );
   }
 
   Future<void> _pickAndSendImage() async {
@@ -491,13 +537,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final conv = chatState.selectedConversation;
     if (conv is! PrivateConversation) return;
 
-    final peer = chatState.peers.cast<MeshPeer?>().firstWhere(
-      (p) => p?.nodeId == conv.peerNodeId,
-      orElse: () => null,
-    );
+    final peer = _resolvePrivatePeer(chatState, conv);
 
     PrivateSendResult result;
     if (peer != null) {
+      _selectResolvedPeerIfNeeded(conv, peer);
       result = await ref
           .read(chatControllerProvider.notifier)
           .sendPrivateFile(
@@ -586,14 +630,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final conv = chatState.selectedConversation;
     if (conv is! PrivateConversation) return;
 
-    final peers = chatState.peers;
-    final peer = peers.cast<MeshPeer?>().firstWhere(
-      (p) => p?.nodeId == conv.peerNodeId,
-      orElse: () => null,
-    );
+    final peer = _resolvePrivatePeer(chatState, conv);
 
     PrivateSendResult result;
     if (peer != null) {
+      _selectResolvedPeerIfNeeded(conv, peer);
       result = await ref
           .read(chatControllerProvider.notifier)
           .sendPrivateImage(peer, payload);
@@ -992,13 +1033,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final conv = chatState.selectedConversation;
     if (conv is! PrivateConversation) return;
 
-    final peer = chatState.peers.cast<MeshPeer?>().firstWhere(
-      (p) => p?.nodeId == conv.peerNodeId,
-      orElse: () => null,
-    );
+    final peer = _resolvePrivatePeer(chatState, conv);
 
     PrivateSendResult result;
     if (peer != null) {
+      _selectResolvedPeerIfNeeded(conv, peer);
       result = await ref
           .read(chatControllerProvider.notifier)
           .sendPrivateAudio(peer, payload);
@@ -1193,15 +1232,35 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     return Scaffold(
       appBar: AppBar(
         title: const Text('AirGrid'),
+        // Seven actions do not fit a 320dp-wide bar at the default 48dp tap
+        // footprint -- they overran it by 14px. AppBar actions have no overflow
+        // behaviour of their own, and the width cannot be read from MediaQuery
+        // here (it reports the screen, not the bar), so the footprint is
+        // tightened for every size rather than branched on a width we cannot
+        // trust. Compact density keeps the tap targets within guidelines.
+        actionsIconTheme: const IconThemeData(size: 22),
         actions: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 2),
             child: Center(
               child: _PeerBadge(count: peerCount, meshOn: meshStarted),
             ),
           ),
           const PublicWalkieStatusIcon(),
+          Consumer(
+            builder: (context, ref, _) {
+              final helpMode = ref.watch(helpModeProvider);
+              return IconButton(
+                visualDensity: VisualDensity.compact,
+                icon: Icon(helpMode ? Icons.help : Icons.help_outline),
+                tooltip: helpMode ? 'Exit help mode' : 'Help',
+                onPressed: () =>
+                    ref.read(helpModeProvider.notifier).state = !helpMode,
+              );
+            },
+          ),
           IconButton(
+            visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
             onPressed: () async {
@@ -1401,12 +1460,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             },
           ),
           IconButton(
+            visualDensity: VisualDensity.compact,
             icon: Icon(_showStatus ? Icons.info : Icons.info_outline),
             tooltip: 'Mesh status',
             onPressed: () => setState(() => _showStatus = !_showStatus),
           ),
           if (meshStarted)
             IconButton(
+              visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.wifi),
               tooltip: 'Stop mesh',
               onPressed: () =>
@@ -1414,6 +1475,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             )
           else
             IconButton(
+              visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.wifi_off),
               tooltip: 'Start mesh',
               onPressed: () =>
@@ -1423,10 +1485,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final compactHeight = constraints.maxHeight < 540;
+          // Branch on the height this Column actually gets, not on the screen
+          // height. The two disagree whenever something above us takes space --
+          // the app bar, a split-screen host, an embedded view -- and when they
+          // disagree the compact layout is skipped on a body that needs it and
+          // the Column overflows. 484 is the old 540 screen threshold minus a
+          // standard app bar.
+          final compactHeight = constraints.maxHeight < 484;
+          // Ceiling only, no floor. A lower clamp bound here used to win on
+          // short windows -- it reserved 110px of a ~264px body for the status
+          // panel and pushed the message list and input bar out of the Column.
+          // The panel is scrollable, so a small one degrades gracefully; an
+          // overflowing layout does not.
           final meshStatusMaxHeight = media.viewInsets.bottom > 0
-              ? (constraints.maxHeight * 0.22).clamp(90.0, 160.0)
-              : (constraints.maxHeight * 0.30).clamp(110.0, 220.0);
+              ? (constraints.maxHeight * 0.22).clamp(0.0, 160.0)
+              : (constraints.maxHeight * 0.30).clamp(0.0, 220.0);
 
           return Column(
             children: [
@@ -1461,27 +1534,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               if (isMeshStarting) const _ConnectingBanner(),
               if (_showStatus)
                 compactHeight
-                    ? SizedBox(
-                        height: meshStatusMaxHeight,
-                        child: SingleChildScrollView(
-                          child: const MeshStatusPanel(),
+                    // Flexible, not SizedBox: the panel must give way when the
+                    // message list and input bar need the room, rather than
+                    // holding a fixed height and overflowing the Column.
+                    ? Flexible(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: meshStatusMaxHeight,
+                          ),
+                          child: SingleChildScrollView(
+                            child: const MeshStatusPanel(),
+                          ),
                         ),
                       )
                     : const MeshStatusPanel(),
               Expanded(
                 child: _MessageList(scrollController: _scrollController),
               ),
-              if (!compactHeight) const _ConversationPicker(),
-              _InputBar(
-                controller: _inputController,
-                onSend: _send,
-                onOpenAttachmentMenu: _showAttachmentMenu,
-                onToggleVoiceRecording: _handleVoiceControlTap,
-                onCancelVoiceRecording: _cancelVoiceRecording,
-                isRecordingVoice: _isRecordingVoice,
-                isVoiceRecordingPaused: _isVoiceRecordingPaused,
-                onSendVoiceRecording: _stopAndSendVoiceNote,
-                voiceRecordingElapsed: _voiceRecordingElapsed,
+              if (!compactHeight)
+                HelpTarget(
+                  title: 'Conversation Selector',
+                  description:
+                      'Switch between Public Chat (broadcast to all nearby) '
+                      'and Private Chats (direct, encrypted messages to specific peers). '
+                      'Private chats are indicated by a lock icon.',
+                  child: const _ConversationPicker(),
+                ),
+              HelpTarget(
+                title: 'Chat Input',
+                description:
+                    'Type a message and tap Send. '
+                    'Use the attachment button (📎) to share photos or files in private chats. '
+                    'Tap the microphone to record and send a voice note.',
+                child: _InputBar(
+                  controller: _inputController,
+                  focusNode: _inputFocusNode,
+                  onSend: _send,
+                  onOpenAttachmentMenu: _showAttachmentMenu,
+                  onToggleVoiceRecording: _handleVoiceControlTap,
+                  onCancelVoiceRecording: _cancelVoiceRecording,
+                  isRecordingVoice: _isRecordingVoice,
+                  isVoiceRecordingPaused: _isVoiceRecordingPaused,
+                  onSendVoiceRecording: _stopAndSendVoiceNote,
+                  voiceRecordingElapsed: _voiceRecordingElapsed,
+                ),
               ),
             ],
           );
@@ -1548,7 +1644,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       },
     );
 
-    if (!mounted || choice == null) return;
+    if (!mounted || choice == null) {
+      await _restoreFocus();
+      return;
+    }
 
     switch (choice) {
       case _AttachmentChoice.voice:
@@ -1561,6 +1660,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         await _pickAndSendFile();
         break;
     }
+
+    await _restoreFocus();
   }
 }
 
@@ -1752,6 +1853,10 @@ class _ConversationPicker extends ConsumerWidget {
       showClosedChats,
       showFriendsOnly,
     );
+    final activeFilterCount =
+        (showOnlineOnly ? 1 : 0) +
+        (showClosedChats ? 1 : 0) +
+        (showFriendsOnly ? 1 : 0);
 
     return Container(
       decoration: BoxDecoration(
@@ -1762,146 +1867,252 @@ class _ConversationPicker extends ConsumerWidget {
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            FilterChip(
-              label: const Text('Online'),
-              selected: showOnlineOnly,
-              onSelected: (enabled) {
-                ref
-                    .read(chatControllerProvider.notifier)
-                    .setShowOnlineOnly(enabled);
-              },
-              showCheckmark: false,
-            ),
-            const SizedBox(width: 8),
-            FilterChip(
-              label: const Text('Closed'),
-              selected: showClosedChats,
-              onSelected: (enabled) {
-                ref
-                    .read(chatControllerProvider.notifier)
-                    .setShowClosedChats(enabled);
-              },
-              showCheckmark: false,
-            ),
-            const SizedBox(width: 8),
-            FilterChip(
-              label: const Text('Friends'),
-              selected: showFriendsOnly,
-              onSelected: (enabled) {
-                ref
-                    .read(chatControllerProvider.notifier)
-                    .setShowFriendsOnly(enabled);
-              },
-              showCheckmark: false,
-            ),
-            const SizedBox(width: 8),
-            ChoiceChip(
-              avatar: Icon(
-                Icons.public_rounded,
-                size: 16,
-                color: selected is PublicConversation
-                    ? cs.onPrimary
-                    : cs.primary,
+      child: Row(
+        children: [
+          PopupMenuButton<String>(
+            tooltip: 'Filter chats',
+            onSelected: (value) {
+              final controller = ref.read(chatControllerProvider.notifier);
+              if (value == 'online') {
+                controller.setShowOnlineOnly(!showOnlineOnly);
+              } else if (value == 'friends') {
+                controller.setShowFriendsOnly(!showFriendsOnly);
+              } else if (value == 'closed') {
+                controller.setShowClosedChats(!showClosedChats);
+              } else if (value == 'clear') {
+                controller
+                  ..setShowOnlineOnly(false)
+                  ..setShowFriendsOnly(false)
+                  ..setShowClosedChats(false);
+              }
+            },
+            itemBuilder: (context) => [
+              _filterMenuItem(
+                value: 'online',
+                label: 'Online',
+                icon: Icons.radio_button_checked_rounded,
+                selected: showOnlineOnly,
               ),
-              label: const Text('Public Space'),
-              selected: selected is PublicConversation,
-              showCheckmark: false,
-              onSelected: (_) => ref
-                  .read(chatControllerProvider.notifier)
-                  .selectConversation(const PublicConversation()),
-            ),
-            const SizedBox(width: 8),
-            ...privateThreads.map((thread) {
-              final isReady = thread.peerNodeId != null;
-              final peerNodeId = thread.peerNodeId;
-              final label = thread.displayName;
-              final conv = selected;
-              final isSelected =
-                  conv is PrivateConversation && conv.peerNodeId == peerNodeId;
-              final unreadCount = peerNodeId == null
-                  ? 0
-                  : unreadPrivateCounts[peerNodeId] ?? 0;
-
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: GestureDetector(
-                  onLongPress: isReady
-                      ? () {
-                          showPeerProfileSheet(
-                            context,
-                            PeerProfileSnapshot(
-                              displayName: thread.displayName,
-                              nodeId: peerNodeId!,
-                              profileIconId: thread.profileIconId,
-                              profileStatus: thread.profileStatus,
-                              isOnline: thread.isConnected,
-                              publicKeyBase64: thread.publicKeyBase64,
-                            ),
-                          );
-                        }
-                      : null,
-                  child: ChoiceChip(
-                    avatar: isReady
-                        ? Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: thread.isConnected
-                                  ? Colors.green
-                                  : cs.outline.withAlpha(150),
-                              shape: BoxShape.circle,
-                              boxShadow: thread.isConnected
-                                  ? [
-                                      BoxShadow(
-                                        color: Colors.green.withAlpha(120),
-                                        blurRadius: 4,
-                                        spreadRadius: 1,
-                                      ),
-                                    ]
-                                  : null,
-                            ),
-                          )
-                        : const SizedBox(
-                            width: 10,
-                            height: 10,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1.5,
-                              valueColor: AlwaysStoppedAnimation(Colors.orange),
-                            ),
-                          ),
-                    label: _ConversationChipLabel(
-                      label: isReady ? label : '$label (setting up)',
-                      unreadCount: isSelected ? 0 : unreadCount,
-                      isClosed: thread.isClosed,
-                    ),
-                    selected: isSelected,
-                    showCheckmark: false,
-                    onSelected: isReady
-                        ? (_) => ref
-                              .read(chatControllerProvider.notifier)
-                              .selectConversation(
-                                PrivateConversation(
-                                  peerNodeId: peerNodeId!,
-                                  peerName: thread.displayName,
-                                ),
-                              )
-                        : null,
+              _filterMenuItem(
+                value: 'friends',
+                label: 'Friends',
+                icon: Icons.verified_user_outlined,
+                selected: showFriendsOnly,
+              ),
+              _filterMenuItem(
+                value: 'closed',
+                label: 'Closed chats',
+                icon: Icons.archive_outlined,
+                selected: showClosedChats,
+              ),
+              if (activeFilterCount > 0) const PopupMenuDivider(),
+              if (activeFilterCount > 0)
+                const PopupMenuItem(
+                  value: 'clear',
+                  child: Row(
+                    children: [
+                      Icon(Icons.filter_alt_off_outlined, size: 20),
+                      SizedBox(width: 12),
+                      Text('Clear filters'),
+                    ],
                   ),
                 ),
-              );
-            }),
-          ],
-        ),
+            ],
+            child: _FilterMenuButton(activeCount: activeFilterCount),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    avatar: Icon(
+                      Icons.public_rounded,
+                      size: 16,
+                      color: selected is PublicConversation
+                          ? cs.onPrimary
+                          : cs.primary,
+                    ),
+                    label: const Text('Public Space'),
+                    selected: selected is PublicConversation,
+                    showCheckmark: false,
+                    onSelected: (_) => ref
+                        .read(chatControllerProvider.notifier)
+                        .selectConversation(const PublicConversation()),
+                  ),
+                  const SizedBox(width: 8),
+                  ...privateThreads.map((thread) {
+                    final isReady = thread.peerNodeId != null;
+                    final peerNodeId = thread.peerNodeId;
+                    final label = thread.displayName;
+                    final conv = selected;
+                    final isSelected =
+                        conv is PrivateConversation &&
+                        conv.peerNodeId == peerNodeId;
+                    final unreadCount = peerNodeId == null
+                        ? 0
+                        : unreadPrivateCounts[peerNodeId] ?? 0;
+
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: GestureDetector(
+                        onLongPress: isReady
+                            ? () {
+                                showPeerProfileSheet(
+                                  context,
+                                  PeerProfileSnapshot(
+                                    displayName: thread.displayName,
+                                    nodeId: peerNodeId!,
+                                    profileIconId: thread.profileIconId,
+                                    profileStatus: thread.profileStatus,
+                                    isOnline: thread.isConnected,
+                                    publicKeyBase64: thread.publicKeyBase64,
+                                  ),
+                                );
+                              }
+                            : null,
+                        child: ChoiceChip(
+                          avatar: isReady
+                              ? Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: thread.isConnected
+                                        ? Colors.green
+                                        : cs.outline.withAlpha(150),
+                                    shape: BoxShape.circle,
+                                    boxShadow: thread.isConnected
+                                        ? [
+                                            BoxShadow(
+                                              color: Colors.green.withAlpha(
+                                                120,
+                                              ),
+                                              blurRadius: 4,
+                                              spreadRadius: 1,
+                                            ),
+                                          ]
+                                        : null,
+                                  ),
+                                )
+                              : const SizedBox(
+                                  width: 10,
+                                  height: 10,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                    valueColor: AlwaysStoppedAnimation(
+                                      Colors.orange,
+                                    ),
+                                  ),
+                                ),
+                          label: _ConversationChipLabel(
+                            label: isReady ? label : '$label (setting up)',
+                            unreadCount: isSelected ? 0 : unreadCount,
+                            isClosed: thread.isClosed,
+                          ),
+                          selected: isSelected,
+                          showCheckmark: false,
+                          onSelected: isReady
+                              ? (_) => ref
+                                    .read(chatControllerProvider.notifier)
+                                    .selectConversation(
+                                      PrivateConversation(
+                                        peerNodeId: peerNodeId!,
+                                        peerName: thread.displayName,
+                                      ),
+                                    )
+                              : null,
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
 // ── Input bar ────────────────────────────────────────────────────────────────
+
+class _FilterMenuButton extends StatelessWidget {
+  final int activeCount;
+
+  const _FilterMenuButton({required this.activeCount});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isActive = activeCount > 0;
+
+    return SizedBox(
+      width: 42,
+      height: 42,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: isActive
+                  ? cs.primaryContainer
+                  : cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              Icons.tune_rounded,
+              color: isActive ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+            ),
+          ),
+          if (isActive)
+            Positioned(
+              top: 2,
+              right: 2,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 17, minHeight: 17),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  color: cs.error,
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Text(
+                  '$activeCount',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: cs.onError,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+PopupMenuItem<String> _filterMenuItem({
+  required String value,
+  required String label,
+  required IconData icon,
+  required bool selected,
+}) {
+  return PopupMenuItem(
+    value: value,
+    child: Row(
+      children: [
+        Icon(selected ? Icons.check_circle_rounded : icon, size: 20),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
+    ),
+  );
+}
 
 List<_PrivateThreadTarget> _privateThreadsFrom(
   List<MeshPeer> peers,
@@ -2084,6 +2295,7 @@ class _ConversationChipLabel extends StatelessWidget {
 
 class _InputBar extends StatelessWidget {
   final TextEditingController controller;
+  final FocusNode focusNode;
   final VoidCallback onSend;
   final VoidCallback onOpenAttachmentMenu;
   final VoidCallback onToggleVoiceRecording;
@@ -2095,6 +2307,7 @@ class _InputBar extends StatelessWidget {
 
   const _InputBar({
     required this.controller,
+    required this.focusNode,
     required this.onSend,
     required this.onOpenAttachmentMenu,
     required this.onToggleVoiceRecording,
@@ -2214,6 +2427,7 @@ class _InputBar extends StatelessWidget {
                         Expanded(
                           child: TextField(
                             controller: controller,
+                            focusNode: focusNode,
                             readOnly: isRecordingVoice,
                             minLines: 1,
                             maxLines: 4,

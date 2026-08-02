@@ -81,9 +81,16 @@ Permissions declaration notes:
 - Notifications are used for foreground mesh session visibility.
 - Foreground service type `connectedDevice` keeps an active user-started mesh
   session running while peers discover and exchange messages.
-- Foreground service type `location` is contributed by the location plugin and
-  supports user-visible location sharing while the app has foreground location
-  permission.
+- Foreground service type `microphone` keeps Rider Mode live audio capture
+  running while the user has explicitly started a one-to-one rider session.
+- Foreground service type `mediaPlayback` keeps Rider Mode peer audio playback
+  audible during an active user-started rider session.
+
+Foreground service Play Console selections:
+
+- Connected device: select `Continuous data transfer to an external device`.
+- Media playback: select `Media playback`.
+- Microphone: select `Background audio input`.
 
 Foreground service declaration text:
 
@@ -94,10 +101,16 @@ and device-to-device message transfer active, shows an ongoing notification,
 and can be stopped by the user from the app. If interrupted, nearby peers may
 disconnect and messages may not be delivered until the mesh is restarted.
 
-AirGrid also includes a location foreground-service type for optional
-user-visible location sharing with connected peers. Location access is requested
-with foreground permission and is used only for app features disclosed to the
-user.
+AirGrid uses a microphone foreground service only when the user explicitly
+starts Rider Mode, a live one-to-one audio session with a trusted nearby peer.
+The service captures microphone audio for the active rider session, shows an
+ongoing notification with mute/end actions, and stops when the user ends Rider
+Mode.
+
+AirGrid uses a media playback foreground service only during active Rider Mode
+sessions so incoming peer audio can continue playing while the user leaves the
+app. Playback is tied to the user-started rider session, shows an ongoing
+notification, and stops when the user ends Rider Mode.
 ```
 
 ## Store Listing Draft
@@ -112,17 +125,81 @@ Full description draft:
 
 ```text
 AirGrid is an offline-first nearby chat app for Android. It lets nearby devices
-exchange public and private messages over Google Nearby Connections using
-Bluetooth and Wi-Fi Direct, without internet, mobile data, routers, or a central
-server.
+exchange messages directly using Bluetooth and Wi-Fi Direct through Google
+Nearby Connections, without internet, mobile data, routers, or a central
+messaging server.
 
-AirGrid supports local mesh discovery, public nearby chat, private chat,
-opportunistic encrypted private messaging, local message history, known
-contacts, and optional location sharing between connected peers.
+Use AirGrid when people are close by but normal connectivity is limited,
+unavailable, or unnecessary. Nearby users can discover each other, join a local
+mesh, and send public or private messages between connected Android devices.
 
-Google Play Services and nearby device permissions are required for the mesh
-transport to work. Real mesh behavior depends on device hardware, Android
-version, radio conditions, and distance between devices.
+Key features:
+
+Offline nearby messaging
+Chat with nearby Android devices without relying on internet access or mobile
+data.
+
+Local mesh communication
+Messages can move between connected nearby devices using a local peer-to-peer
+mesh.
+
+Public nearby chat
+Send messages to people around you who are connected to the same local AirGrid
+mesh.
+
+Private chat
+Message selected nearby contacts directly when they are available in the mesh.
+
+Encrypted private messaging
+AirGrid supports opportunistic encryption for private messages after devices
+exchange the required public keys.
+
+Voice notes and media sharing
+Send voice notes, photos, and files to nearby peers when the local mesh
+connection supports the transfer.
+
+Walkie-talkie audio
+Send short public walkie clips to the local mesh or start an invited private
+walkie session with a selected peer.
+
+Rider Mode
+Start a trusted one-to-one live audio session with mute controls and
+voice-activated microphone support for close-range coordination.
+
+Local message history
+Messages are stored on your device and not on a central AirGrid server, so you
+can view recent conversations locally.
+
+Known and trusted contacts
+AirGrid can remember nearby contacts discovered through the mesh. You can mark
+trusted contacts for private walkie and Rider Mode features.
+
+Optional location sharing
+Share your location with connected peers only when you choose to use that
+feature.
+
+AirGrid is designed for local communication. It does not operate a central
+messaging server for normal mesh messaging, and your messages are exchanged
+directly with nearby devices.
+
+Google Play Services is required. AirGrid also needs nearby device permissions
+such as Bluetooth, Wi-Fi, notifications, microphone, and location-related
+permissions because Android requires them for nearby discovery,
+device-to-device connections, foreground mesh sessions, and optional audio or
+location features.
+
+Mesh performance may vary depending on device hardware, Android version,
+distance, radio conditions, and the number of nearby peers.
+
+AirGrid can be useful during events, travel, outdoor activities such as hiking
+and camping, campuses, workplaces, community gatherings, dormitories, hostels,
+hotels, and emergency preparedness situations where nearby people need to
+communicate without relying on internet or mobile data.
+
+Keep AirGrid ready on your device. You never know when nearby offline
+communication will be useful.
+
+AirGrid is currently Android-only.
 ```
 
 ## Device Validation Before Wider Release

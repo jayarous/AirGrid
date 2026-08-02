@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:airgrid/app/app_router.dart';
+import 'package:airgrid/core/legal_text.dart';
+import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/validation.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:flutter/material.dart';
@@ -16,6 +18,7 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _nameController = TextEditingController();
   int _step = 0; // 0=intro, 1=name
+  bool _acceptedTerms = false;
 
   @override
   void initState() {
@@ -56,6 +59,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 16, height: 1.6),
         ),
+        const SizedBox(height: 18),
+        const _SafetyNotice(),
         const SizedBox(height: 40),
         FilledButton(
           onPressed: () {
@@ -96,9 +101,32 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           textInputAction: TextInputAction.next,
           onSubmitted: (_) => _saveNameAndContinue(),
         ),
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: _acceptedTerms,
+          onChanged: (value) {
+            setState(() => _acceptedTerms = value ?? false);
+          },
+          title: const Text(LegalText.acknowledgement),
+        ),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 8,
+          children: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pushNamed(AppRouter.legal),
+              child: const Text('Terms of Use'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pushNamed(AppRouter.legal),
+              child: const Text('Privacy Policy'),
+            ),
+          ],
+        ),
         const SizedBox(height: 24),
         FilledButton(
-          onPressed: _saveNameAndContinue,
+          onPressed: _acceptedTerms ? _saveNameAndContinue : null,
           child: const Text('Continue'),
         ),
       ],
@@ -118,10 +146,18 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       return;
     }
 
+    if (!_acceptedTerms) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please accept the Terms of Use first.')),
+      );
+      return;
+    }
+
     // Save the sanitized value
-    await ref
-        .read(localIdentityStoreProvider)
-        .saveDisplayName(validation.sanitizedValue!);
+    final identity = ref.read(localIdentityStoreProvider);
+    await identity.acceptTerms(LegalText.termsVersion);
+    await identity.saveDisplayName(validation.sanitizedValue!);
+    await ref.read(meshPermissionsProvider).requestMeshPermissions();
     if (!mounted) return;
     unawaited(Navigator.of(context).pushReplacementNamed(AppRouter.home));
   }
@@ -151,6 +187,35 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+class _SafetyNotice extends StatelessWidget {
+  const _SafetyNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.warning_amber_rounded, color: cs.onErrorContainer),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              LegalText.shortSafetyNotice,
+              style: TextStyle(color: cs.onErrorContainer, height: 1.35),
+            ),
+          ),
+        ],
       ),
     );
   }

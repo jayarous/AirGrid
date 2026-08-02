@@ -1,0 +1,8 @@
+AirGrid 1.0.9
+
+What's new:
+- Added in-app Help mode — tap the ? icon in any screen to toggle help badges, then tap a badge for a detailed explanation of that control.
+- Enhanced accessibility: added Semantics labels to peer tiles, walkie controls, and quick-action cards for better TalkBack support.
+- Improved Nearby error messages on Home screen — transport failures and missing location permissions are now clearly separated.
+- Added Report a problem in Settings to share device, mesh, permission, and log diagnostics.
+- Smaller AAB size and general stability improvements.

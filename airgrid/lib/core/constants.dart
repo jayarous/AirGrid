@@ -119,6 +119,13 @@ class AirGridConstants {
   /// Inbound packet burst capacity per peer (max tokens in bucket).
   static const int kInboundPacketBurst = 20;
 
+  /// Rider audio frame rate per peer. Higher than chat because Rider Mode
+  /// sends small near-live PCM frames while a trusted 1:1 session is active.
+  static const double kRiderInboundFrameRatePerSec = 25.0;
+
+  /// Rider audio frame burst capacity per peer.
+  static const int kRiderInboundFrameBurst = 40;
+
   /// Key announce cooldown: minimum interval between accepting key_announce
   /// packets from the same node ID / public key pair.
   static const Duration kKeyAnnounceCooldown = Duration(seconds: 5);

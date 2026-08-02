@@ -95,20 +95,64 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Edit Profile')),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: FilledButton(
+            onPressed: _saving ? null : _save,
+            child: _saving
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Save Profile'),
+          ),
+        ),
+      ),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
-            Center(
-              child: CircleAvatar(
-                radius: 34,
-                backgroundColor: cs.primaryContainer,
-                child: Icon(
-                  selectedIcon,
-                  size: 34,
-                  color: cs.onPrimaryContainer,
-                ),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: cs.outlineVariant.withAlpha(80)),
+              ),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 34,
+                    backgroundColor: cs.primaryContainer,
+                    child: Icon(
+                      selectedIcon,
+                      size: 34,
+                      color: cs.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Profile preview',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'This is how nearby peers identify you in AirGrid.',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 20),
@@ -142,7 +186,9 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             const SizedBox(height: 10),
             Text(
               'Choose your icon',
-              style: Theme.of(context).textTheme.titleMedium,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 10),
             GridView.builder(
@@ -157,53 +203,64 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
               itemBuilder: (context, index) {
                 final option = ProfileAvatarCatalog.options[index];
                 final isSelected = option.id == _selectedIconId;
-                return InkWell(
-                  borderRadius: BorderRadius.circular(14),
+                return _IconOptionTile(
+                  option: option,
+                  isSelected: isSelected,
                   onTap: () => setState(() => _selectedIconId = option.id),
-                  child: Ink(
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? cs.primaryContainer
-                          : cs.surfaceContainerHigh,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: isSelected ? cs.primary : cs.outlineVariant,
-                        width: isSelected ? 2 : 1,
-                      ),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          option.icon,
-                          color: isSelected
-                              ? cs.onPrimaryContainer
-                              : cs.onSurfaceVariant,
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          option.label,
-                          style: Theme.of(context).textTheme.bodySmall,
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ),
                 );
               },
             ),
-            const SizedBox(height: 20),
-            FilledButton(
-              onPressed: _saving ? null : _save,
-              child: _saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save Profile'),
-            ),
+            const SizedBox(height: 76),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _IconOptionTile extends StatelessWidget {
+  final ProfileAvatarOption option;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _IconOptionTile({
+    required this.option,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: isSelected ? cs.primaryContainer : cs.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isSelected ? cs.primary : cs.outlineVariant,
+              width: isSelected ? 2 : 1,
+            ),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                option.icon,
+                color: isSelected ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                option.label,
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );

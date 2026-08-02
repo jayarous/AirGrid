@@ -1,3 +1,4 @@
+import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
@@ -131,7 +132,10 @@ Future<void> _pumpWithProviders(
         ),
         meshPermissionsProvider.overrideWithValue(const _FakeMeshPermissions()),
       ],
-      child: MaterialApp(home: child),
+      child: MaterialApp(
+        onGenerateRoute: AppRouter.onGenerateRoute,
+        home: child,
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -203,13 +207,13 @@ void main() {
     await _pumpWithProviders(tester, const SettingsScreen(), unavailable);
 
     await tester.scrollUntilVisible(
-      find.text('Platform support'),
+      find.text('Battery & Device Access'),
       300,
       scrollable: find.byType(Scrollable).first,
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Platform support'), findsOneWidget);
+    expect(find.text('Battery & Device Access'), findsOneWidget);
     expect(find.text('Google Play Services'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Bluetooth scan'),
@@ -228,20 +232,58 @@ void main() {
       const PlayServicesStatus.available(),
     );
 
-    expect(find.text('Battery Optimization'), findsWidgets);
+    expect(find.text('AirGrid battery saver'), findsOneWidget);
+    // Battery saver defaults OFF (ChatState.batteryOptimizationEnabled, set to
+    // false by RiderModeReady -- rider mode needs continuous background mesh
+    // activity). So the "Off:" note is what renders first, and toggling swaps
+    // it to the "On:" note. This assertion pair is the point of the test: the
+    // subtitle has to track the switch.
+    expect(find.textContaining('may continue scanning'), findsOneWidget);
+    expect(find.text('Mesh status'), findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, 'Available'), findsOneWidget);
+    expect(find.text('Scanning'), findsOneWidget);
+    expect(find.text('Offline'), findsOneWidget);
+
+    final batterySaverSwitch = find.widgetWithText(
+      SwitchListTile,
+      'AirGrid battery saver',
+    );
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -260));
+    await tester.pumpAndSettle();
+    await tester.tap(batterySaverSwitch);
+    await tester.pumpAndSettle();
+
     expect(
       find.textContaining('stops scanning and sharing location'),
       findsOneWidget,
     );
-    expect(find.text('Mesh status'), findsOneWidget);
-    expect(find.text('Available'), findsOneWidget);
-    expect(find.text('Scanning'), findsOneWidget);
-    expect(find.text('Off'), findsOneWidget);
+  });
 
-    await tester.tap(find.byType(SwitchListTile).first);
+  testWidgets('Settings opens Terms & Safety screen', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await _pumpWithProviders(
+      tester,
+      const SettingsScreen(),
+      const PlayServicesStatus.available(),
+    );
+
+    await tester.scrollUntilVisible(
+      find.text('Terms & Safety'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    final legalTile = find.byWidgetPredicate((widget) {
+      final title = widget is ListTile ? widget.title : null;
+      return title is Text && title.data == 'Terms & Safety';
+    });
+    await tester.ensureVisible(legalTile);
+    await tester.tap(legalTile);
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('may continue scanning'), findsOneWidget);
+    expect(find.text('Version 2026-06-07'), findsOneWidget);
+    expect(find.text('Not for emergencies'), findsOneWidget);
   });
 
   testWidgets('Settings persists nearby heading smoothing', (tester) async {
@@ -326,7 +368,7 @@ void main() {
       repository: repository,
     );
 
-    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.tap(find.byType(PopupMenuButton<String>).last);
     await tester.pumpAndSettle();
     expect(find.text('Clear all chats'), findsOneWidget);
     await tester.tap(find.text('Clear all chats'));
@@ -349,7 +391,7 @@ void main() {
       repository: repository,
     );
 
-    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.tap(find.byType(PopupMenuButton<String>).last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Clear all chats'));
     await tester.pumpAndSettle();

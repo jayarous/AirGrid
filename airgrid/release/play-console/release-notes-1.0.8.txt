@@ -1,0 +1,6 @@
+AirGrid 1.0.8
+
+What's new:
+- Fixed Nearby startup on devices where Google Nearby requires coarse location permission for discovery.
+- Location is now treated as a required mesh permission alongside Bluetooth and Nearby Wi-Fi.
+- Report a problem now includes native Android permission checks to help troubleshoot device-specific permission mismatches.

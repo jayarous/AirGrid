@@ -11,21 +11,13 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 
-/**
- * Foreground service that keeps the Nearby Connections session alive while
- * AirGrid is active.
- *
- * Android 15+ requires [ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE]
- * for apps that maintain Bluetooth/Wi-Fi peer connections.
- *
- * Background behaviour is best-effort only — this service does not guarantee
- * mesh reliability when the app is backgrounded or the screen is off.
- */
 class NearbyForegroundService : Service() {
 
     companion object {
         const val CHANNEL_ID = "airgrid_mesh"
         const val NOTIFICATION_ID = 1001
+        const val ACTION_RIDER_MUTE = "com.airgrid.app.action.RIDER_MUTE"
+        const val ACTION_RIDER_END = "com.airgrid.app.action.RIDER_END"
     }
 
     override fun onCreate() {
@@ -34,14 +26,24 @@ class NearbyForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildNotification()
+        val isRider = intent?.getBooleanExtra("riderMode", false) == true
+        val peerName = intent?.getStringExtra("peerName") ?: "Rider"
+        val muted = intent?.getBooleanExtra("muted", false) == true
+        val notification = if (isRider) {
+            buildRiderNotification(peerName, muted)
+        } else {
+            buildNotification()
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // API 34+ — must declare the foreground service type explicitly
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-            )
+            val serviceType = if (isRider) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            }
+            startForeground(NOTIFICATION_ID, notification, serviceType)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -97,6 +99,49 @@ class NearbyForegroundService : Service() {
                 android.R.drawable.ic_menu_close_clear_cancel,
                 "Exit",
                 exitPendingIntent,
+            )
+            .build()
+    }
+
+    private fun buildRiderNotification(peerName: String, muted: Boolean): Notification {
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingFlags =
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pendingIntent =
+            PendingIntent.getActivity(this, 0, openIntent, pendingFlags)
+
+        val muteIntent = Intent(this, MainActivity::class.java).apply {
+            action = ACTION_RIDER_MUTE
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val mutePendingIntent =
+            PendingIntent.getActivity(this, 3, muteIntent, pendingFlags)
+
+        val endIntent = Intent(this, MainActivity::class.java).apply {
+            action = ACTION_RIDER_END
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val endPendingIntent =
+            PendingIntent.getActivity(this, 4, endIntent, pendingFlags)
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Rider Mode active")
+            .setContentText("${if (muted) "Muted" else "Live"} with $peerName")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(
+                android.R.drawable.ic_btn_speak_now,
+                if (muted) "Unmute" else "Mute",
+                mutePendingIntent,
+            )
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "End",
+                endPendingIntent,
             )
             .build()
     }

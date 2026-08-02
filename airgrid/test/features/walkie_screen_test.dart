@@ -1,16 +1,16 @@
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
-import 'package:airgrid/data/storage/chat_list_preferences_store.dart';
 import 'package:airgrid/data/storage/known_contact_store.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
 import 'package:airgrid/data/storage/message_repository.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
-import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
 import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/delivery_status.dart';
+import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
+import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/walkie/walkie_screen.dart';
 import 'package:flutter/material.dart';
@@ -45,6 +45,24 @@ class _NoopMessageRepository implements MessageRepository {
   Future<void> updateStatus(String messageId, DeliveryStatus status) async {}
 }
 
+/// Seeds [ChatState.selectedConversation] before [WalkieScreen] mounts.
+///
+/// The screen derives its initial Public/Private mode from that value once,
+/// in `initState`. Overriding the controller this way lets tests land on a
+/// pre-chosen private target from the start (mirroring, e.g., navigating in
+/// from the Nearby screen) instead of calling `selectConversation` after the
+/// screen has already initialized in Public mode.
+class _SeededChatController extends ChatController {
+  _SeededChatController(this._initialConversation);
+
+  final ConversationTarget _initialConversation;
+
+  @override
+  ChatState build() {
+    return super.build().copyWith(selectedConversation: _initialConversation);
+  }
+}
+
 Future<LocalIdentityStore> _identity() async {
   SharedPreferences.setMockInitialValues({
     'airgrid_node_id': 'local-node',
@@ -58,6 +76,8 @@ Future<void> _pumpWalkie(
   WidgetTester tester, {
   FakeTransport? transport,
   FakeForegroundService? foreground,
+  KnownContactStore? knownContactStore,
+  ConversationTarget? initialConversation,
 }) async {
   final fg = foreground ?? FakeForegroundService();
   final tx = transport ?? FakeTransport();
@@ -75,21 +95,19 @@ Future<void> _pumpWalkie(
         foregroundServiceProvider.overrideWithValue(fg),
         cryptoServiceProvider.overrideWithValue(CryptoService()),
         knownContactStoreProvider.overrideWithValue(
-          InMemoryKnownContactStore(),
+          knownContactStore ?? InMemoryKnownContactStore(),
         ),
         localReportStoreProvider.overrideWithValue(InMemoryLocalReportStore()),
         privacySettingsStoreProvider.overrideWithValue(
           InMemoryPrivacySettingsStore(),
         ),
-        publicWalkieSettingsStoreProvider.overrideWithValue(
-          InMemoryPublicWalkieSettingsStore(),
-        ),
-        chatListPreferencesStoreProvider.overrideWithValue(
-          InMemoryChatListPreferencesStore(),
-        ),
         batterySettingsStoreProvider.overrideWithValue(
           InMemoryBatterySettingsStore(),
         ),
+        if (initialConversation != null)
+          chatControllerProvider.overrideWith(
+            () => _SeededChatController(initialConversation),
+          ),
       ],
       child: const MaterialApp(home: WalkieScreen()),
     ),
@@ -97,32 +115,125 @@ Future<void> _pumpWalkie(
   await tester.pumpAndSettle();
 }
 
-void main() {
-  // The walkie screen presents state as a radio channel readout, not as
-  // prose labels. The call sign is `CH-<TARGET>` uppercased, and the channel
-  // strip shows `Channel NN: <peer>` for peers currently connected.
+/// Taps the "Private" entry in the walkie mode selector. This is the only
+/// way to reach `_isPublicMode == false` with no target chosen, since
+/// [ConversationTarget] has no "nothing selected" variant distinct from
+/// [PublicConversation] / [PrivateConversation].
+Future<void> _switchToPrivateMode(WidgetTester tester) async {
+  await tester.tap(find.text('Private'));
+  await tester.pumpAndSettle();
+}
 
-  testWidgets('shows no-target channel readout by default', (tester) async {
+void main() {
+  testWidgets('renders without overflow on a compact portrait screen', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 640);
+    addTearDown(() {
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
+    });
+
     await _pumpWalkie(tester);
 
-    expect(find.text('CH-NO TARGET'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('shows selected private target in the call sign', (tester) async {
+  testWidgets('renders at full size and scrolls instead of shrinking in '
+      'landscape', (tester) async {
+    // Guards against the FittedBox(scaleDown) regression this replaced:
+    // that layout uniformly shrank the whole screen to fit a short
+    // landscape viewport instead of reflowing/scrolling like Home/Nearby.
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(640, 320);
+    addTearDown(() {
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
+    });
+
+    await _pumpWalkie(tester);
+
+    expect(tester.takeException(), isNull);
+
+    // The PTT button's AnimatedContainer is built with a fixed
+    // 220-logical-pixel width/height. Under the old FittedBox(scaleDown)
+    // layout it would render far smaller on this short viewport; getRect
+    // (unlike getSize) reflects any ancestor transform, so this genuinely
+    // detects a shrink regression.
+    final pttFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is AnimatedContainer && widget.constraints?.maxWidth == 220,
+    );
+    expect(pttFinder, findsOneWidget);
+    final pttRect = tester.getRect(pttFinder);
+    expect(pttRect.height, greaterThan(150));
+  });
+
+  testWidgets('shows no-target presence state in private mode', (tester) async {
+    // The screen defaults to Public mode (ChatState.initial() selects the
+    // public conversation), so Private mode with no target must be reached
+    // via the mode selector rather than assumed as the initial state.
+    await _pumpWalkie(tester);
+    await _switchToPrivateMode(tester);
+
+    expect(find.text('Private target'), findsOneWidget);
+    expect(
+      find.text('Choose someone nearby to start a private walkie.'),
+      findsOneWidget,
+    );
+    expect(find.text('Choose person'), findsOneWidget);
+    expect(find.text('CHOOSE SOMEONE'), findsOneWidget);
+  });
+
+  testWidgets('public walkie icon toggles public online state', (tester) async {
     await _pumpWalkie(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
     );
+    expect(
+      container.read(chatControllerProvider).walkie.publicStayOnline,
+      isFalse,
+    );
 
-    container
-        .read(chatControllerProvider.notifier)
-        .selectConversation(
-          const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
-        );
+    await tester.tap(
+      find.byTooltip('Turn public walkie online (Long press to open Walkie)'),
+    );
     await tester.pumpAndSettle();
 
-    expect(find.text('CH-ALEX'), findsOneWidget);
+    expect(
+      container.read(chatControllerProvider).walkie.publicStayOnline,
+      isTrue,
+    );
+
+    await tester.tap(
+      find.byTooltip('Turn public walkie offline (Long press to open Walkie)'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(chatControllerProvider).walkie.publicStayOnline,
+      isFalse,
+    );
+  });
+
+  testWidgets('shows selected private target name', (tester) async {
+    // Seed the private target before mount so `_isPublicMode` initializes to
+    // false and the dynamic action hint (driven by controller state, not by
+    // a one-off `_status` message) is exercised alongside the target card.
+    await _pumpWalkie(
+      tester,
+      initialConversation: const PrivateConversation(
+        peerNodeId: 'peer-1',
+        peerName: 'Alex',
+      ),
+    );
+
+    expect(find.text('Alex'), findsOneWidget);
+    expect(find.text('Alex is not online yet.'), findsWidgets);
+    expect(find.text('Invite'), findsOneWidget);
+    expect(find.text('INVITE FIRST'), findsOneWidget);
   });
 
   testWidgets('shows target online when selected peer is connected', (
@@ -130,23 +241,29 @@ void main() {
   ) async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    await _pumpWalkie(tester, transport: transport, foreground: foreground);
+    await _pumpWalkie(
+      tester,
+      transport: transport,
+      foreground: foreground,
+      initialConversation: const PrivateConversation(
+        peerNodeId: 'peer-1',
+        peerName: 'Alex',
+      ),
+    );
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
     );
     final controller = container.read(chatControllerProvider.notifier);
-
     await controller.startMesh();
-    controller.selectConversation(
-      const PrivateConversation(peerNodeId: 'peer-1', peerName: 'Alex'),
-    );
     transport.connectPeer('endpoint-1', name: 'Alex', nodeId: 'peer-1');
     await tester.pumpAndSettle();
 
-    // A connected peer earns a numbered channel entry; an offline target
-    // falls back to the generic 'Paired private session' description.
-    expect(find.text('Channel 01: Alex'), findsOneWidget);
+    expect(find.text('Invite'), findsOneWidget);
+    expect(
+      find.text('Tap Invite to start a private session with Alex.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('renders walkie last error from controller state', (
@@ -170,6 +287,7 @@ void main() {
     tester,
   ) async {
     await _pumpWalkie(tester);
+    await _switchToPrivateMode(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
@@ -178,24 +296,21 @@ void main() {
     container
         .read(chatControllerProvider.notifier)
         .setWalkieSending(isSending: true);
-    // Not pumpAndSettle: sending starts the speaker pulse, a repeating
-    // animation that never settles, so pumpAndSettle would time out.
     await tester.pump();
 
-    final iconButtonFinder = find.ancestor(
-      of: find.byIcon(Icons.people_alt_outlined),
-      matching: find.byType(IconButton),
+    final chooseButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Choose person'),
     );
-    final iconButton = tester.widget<IconButton>(iconButtonFinder);
-    expect(iconButton.onPressed, isNull);
+    expect(chooseButton.onPressed, isNull);
   });
 
   testWidgets('choose target shows no-peers snackbar when list is empty', (
     tester,
   ) async {
     await _pumpWalkie(tester);
+    await _switchToPrivateMode(tester);
 
-    await tester.tap(find.byTooltip('Choose target'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Choose person'));
     await tester.pump();
 
     expect(find.text('No online private peers available yet.'), findsOneWidget);
@@ -205,6 +320,7 @@ void main() {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
     await _pumpWalkie(tester, transport: transport, foreground: foreground);
+    await _switchToPrivateMode(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(WalkieScreen)),
@@ -213,9 +329,71 @@ void main() {
     transport.connectPeer('endpoint-1', name: 'Alex', nodeId: 'peer-1');
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Choose target'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Choose person'));
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(TextButton, 'Invite'), findsWidgets);
+    expect(find.widgetWithText(ElevatedButton, 'Invite'), findsWidgets);
+  });
+
+  testWidgets('private stay online shows and toggles always-on state', (
+    tester,
+  ) async {
+    final contactStore = InMemoryKnownContactStore();
+    await contactStore.upsert(
+      KnownContact(
+        nodeId: 'peer-1',
+        displayName: 'Alex',
+        publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        lastSeenAt: DateTime(2026),
+      ),
+    );
+
+    await _pumpWalkie(
+      tester,
+      knownContactStore: contactStore,
+      initialConversation: const PrivateConversation(
+        peerNodeId: 'peer-1',
+        peerName: 'Alex',
+      ),
+    );
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(WalkieScreen)),
+    );
+
+    final stayOnlineButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Offline'),
+    );
+    expect(stayOnlineButton.onPressed, isNotNull);
+
+    var contact = contactStore.contacts.singleWhere(
+      (item) => item.nodeId == 'peer-1',
+    );
+    expect(contact.isTrusted, isFalse);
+    expect(contact.walkieAlwaysOn, isFalse);
+
+    await container
+        .read(chatControllerProvider.notifier)
+        .trustContact('peer-1');
+    await tester.pumpAndSettle();
+
+    final enabledButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Offline'),
+    );
+    expect(enabledButton.onPressed, isNotNull);
+
+    // Simulate the app missing a contact stream refresh before the user taps.
+    // The button should still flip because the controller refreshes its state
+    // directly after writing the private walkie setting.
+    await contactStore.setWalkieAlwaysOn('peer-1', false);
+    await tester.tap(find.widgetWithText(FilledButton, 'Offline'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(FilledButton, 'Online'), findsOneWidget);
+    contact = contactStore.contacts.singleWhere(
+      (item) => item.nodeId == 'peer-1',
+    );
+    expect(contact.isTrusted, isTrue);
+    expect(contact.walkieAlwaysOn, isTrue);
   });
 }

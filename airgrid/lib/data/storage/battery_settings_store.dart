@@ -19,7 +19,7 @@ class SharedPrefsBatterySettingsStore implements BatterySettingsStore {
   bool _cached;
 
   SharedPrefsBatterySettingsStore._(this._prefs)
-    : _cached = _prefs.getBool(_prefsKey) ?? true;
+    : _cached = _prefs.getBool(_prefsKey) ?? false;
 
   static Future<SharedPrefsBatterySettingsStore> create() async {
     final prefs = await SharedPreferences.getInstance();
@@ -42,7 +42,7 @@ class SharedPrefsBatterySettingsStore implements BatterySettingsStore {
 class InMemoryBatterySettingsStore implements BatterySettingsStore {
   bool _enabled;
 
-  InMemoryBatterySettingsStore({bool initialEnabled = true})
+  InMemoryBatterySettingsStore({bool initialEnabled = false})
     : _enabled = initialEnabled;
 
   @override

@@ -1,7 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:airgrid/core/logger.dart';
 import 'package:cryptography/cryptography.dart';
-import 'package:flutter/foundation.dart';
 
 /// In-memory peer public-key cache and local encryption/decryption service.
 ///
@@ -45,6 +46,7 @@ class CryptoService {
   }
 
   final Map<String, SimplePublicKey> _keyCache = {};
+  final Map<String, Future<SecretKey>> _sharedSecretCache = {};
   SimpleKeyPairData? _localKeyPair;
 
   // ── Local keypair ────────────────────────────────────────────────────────
@@ -76,18 +78,19 @@ class CryptoService {
     try {
       final bytes = base64Decode(base64PublicKey);
       if (bytes.length != 32) {
-        if (kDebugMode) {
-          debugPrint(
-            '[CRYPTO] Invalid key for $nodeId: expected 32 bytes, got ${bytes.length}',
-          );
-        }
+        AirGridLogger.log(
+          LogCategory.crypto,
+          'Ignored peer key with invalid length during cache update',
+        );
         return;
       }
       _keyCache[nodeId] = SimplePublicKey(bytes, type: KeyPairType.x25519);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[CRYPTO] Malformed key for $nodeId: $e');
-      }
+      _sharedSecretCache.remove(nodeId);
+    } catch (_) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Ignored malformed peer key during cache update',
+      );
     }
   }
 
@@ -100,6 +103,17 @@ class CryptoService {
   /// All node IDs for which a public key is cached.
   Set<String> get knownNodeIds => Set.unmodifiable(_keyCache.keys);
 
+  Future<SecretKey?> _sharedSecretFor(String nodeId) async {
+    final localKp = _localKeyPair;
+    final theirKey = _keyCache[nodeId];
+    if (localKp == null || theirKey == null) return null;
+    return _sharedSecretCache.putIfAbsent(
+      nodeId,
+      () =>
+          _x25519.sharedSecretKey(keyPair: localKp, remotePublicKey: theirKey),
+    );
+  }
+
   // ── Encryption ───────────────────────────────────────────────────────────
 
   /// Encrypts [plaintext] for [recipientNodeId] using the local keypair and
@@ -111,17 +125,22 @@ class CryptoService {
     String plaintext,
     String recipientNodeId,
   ) async {
-    final localKp = _localKeyPair;
-    final theirKey = _keyCache[recipientNodeId];
-    if (localKp == null || theirKey == null) return null;
+    return encryptBytes(
+      Uint8List.fromList(utf8.encode(plaintext)),
+      recipientNodeId,
+    );
+  }
+
+  Future<String?> encryptBytes(
+    Uint8List plaintext,
+    String recipientNodeId,
+  ) async {
+    final sharedSecret = await _sharedSecretFor(recipientNodeId);
+    if (sharedSecret == null) return null;
 
     try {
-      final sharedSecret = await _x25519.sharedSecretKey(
-        keyPair: localKp,
-        remotePublicKey: theirKey,
-      );
       final secretBox = await _chacha.encrypt(
-        utf8.encode(plaintext),
+        plaintext,
         secretKey: sharedSecret,
       );
       final combined = Uint8List.fromList([
@@ -130,12 +149,11 @@ class CryptoService {
         ...secretBox.mac.bytes,
       ]);
       return base64Encode(combined);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[CRYPTO] Encryption failed for recipient $recipientNodeId: $e',
-        );
-      }
+    } catch (_) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Encryption failed for recipient due to cryptographic operation error',
+      );
       return null;
     }
   }
@@ -148,6 +166,19 @@ class CryptoService {
   /// Returns the plaintext string, or null if decryption fails for any reason
   /// (wrong key, truncated payload, authentication failure, etc.).
   Future<String?> decryptContent(
+    String encryptedB64,
+    String senderPublicKeyB64,
+  ) async {
+    final plainBytes = await decryptBytes(encryptedB64, senderPublicKeyB64);
+    if (plainBytes == null) return null;
+    try {
+      return utf8.decode(plainBytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Uint8List?> decryptBytes(
     String encryptedB64,
     String senderPublicKeyB64,
   ) async {
@@ -180,11 +211,12 @@ class CryptoService {
         secretBox,
         secretKey: sharedSecret,
       );
-      return utf8.decode(plainBytes);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[CRYPTO] Decryption failed: $e');
-      }
+      return Uint8List.fromList(plainBytes);
+    } catch (_) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Decryption failed due to invalid payload or key mismatch',
+      );
       return null;
     }
   }

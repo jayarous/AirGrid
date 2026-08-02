@@ -1,0 +1,6 @@
+AirGrid 1.0.7
+
+What's new:
+- Added Report a problem in Settings to share device and mesh diagnostics.
+- Improved Nearby startup errors so Play Services status and radio/transport failures are shown separately.
+- Added recent AirGrid log details to help troubleshoot device-specific Bluetooth, Wi-Fi, and Nearby issues.

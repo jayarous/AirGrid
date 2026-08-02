@@ -1,13 +1,20 @@
+import 'dart:io';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class MeshPermissionsSnapshot {
   final Map<Permission, PermissionStatus> statuses;
+  final List<Permission> criticalPermissions;
 
-  const MeshPermissionsSnapshot(this.statuses);
+  const MeshPermissionsSnapshot(
+    this.statuses, {
+    this.criticalPermissions = MeshPermissions.criticalPermissions,
+  });
 
   bool get hasMissingCriticalPermissions =>
-      MeshPermissions.criticalPermissions.any((permission) {
+      criticalPermissions.any((permission) {
         final status = statuses[permission];
         return status == null || status.isDenied || status.isPermanentlyDenied;
       });
@@ -24,15 +31,17 @@ class MeshPermissionsSnapshot {
 class MeshPermissions {
   const MeshPermissions();
 
+  static const _platformChannel = MethodChannel('com.airgrid/platform');
+
   static const criticalPermissions = <Permission>[
     Permission.bluetoothScan,
     Permission.bluetoothAdvertise,
     Permission.bluetoothConnect,
     Permission.nearbyWifiDevices,
+    Permission.location,
   ];
 
   static const optionalPermissions = <Permission>[
-    Permission.location,
     Permission.notification,
     Permission.ignoreBatteryOptimizations,
   ];
@@ -42,17 +51,73 @@ class MeshPermissions {
     ...optionalPermissions,
   ];
 
+  static List<Permission> criticalPermissionsForAndroidSdk(int sdkInt) {
+    if (sdkInt >= 33) {
+      return criticalPermissions;
+    }
+    if (sdkInt >= 31) {
+      return const [
+        Permission.bluetoothScan,
+        Permission.bluetoothAdvertise,
+        Permission.bluetoothConnect,
+        Permission.location,
+      ];
+    }
+    return const [Permission.location];
+  }
+
   Future<MeshPermissionsSnapshot> checkStatuses() async {
     final statuses = <Permission, PermissionStatus>{};
     for (final permission in allPermissions) {
       statuses[permission] = await permission.status;
     }
-    return MeshPermissionsSnapshot(statuses);
+    final criticalPermissions = await _criticalPermissionsForCurrentPlatform();
+    return MeshPermissionsSnapshot(
+      statuses,
+      criticalPermissions: criticalPermissions,
+    );
   }
 
   Future<MeshPermissionsSnapshot> requestMeshPermissions() async {
     final statuses = await allPermissions.request();
-    return MeshPermissionsSnapshot(statuses);
+    final criticalPermissions = await _criticalPermissionsForCurrentPlatform();
+    return MeshPermissionsSnapshot(
+      statuses,
+      criticalPermissions: criticalPermissions,
+    );
+  }
+
+  Future<Map<String, bool>> androidRuntimePermissionStatuses() async {
+    if (!Platform.isAndroid) return const {};
+    try {
+      final raw = await _platformChannel.invokeMapMethod<Object?, Object?>(
+        'androidPermissionStatuses',
+      );
+      if (raw == null) return const {};
+      return raw.map((key, value) => MapEntry(key.toString(), value == true));
+    } on PlatformException {
+      return const {};
+    } on MissingPluginException {
+      return const {};
+    }
+  }
+
+  Future<List<Permission>> _criticalPermissionsForCurrentPlatform() async {
+    if (!Platform.isAndroid) {
+      return criticalPermissions;
+    }
+    final sdkInt = await _androidSdkInt();
+    return criticalPermissionsForAndroidSdk(sdkInt);
+  }
+
+  Future<int> _androidSdkInt() async {
+    try {
+      return await _platformChannel.invokeMethod<int>('androidSdkInt') ?? 33;
+    } on PlatformException {
+      return 33;
+    } on MissingPluginException {
+      return 33;
+    }
   }
 
   String labelFor(Permission permission) {

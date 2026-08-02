@@ -1,0 +1,6 @@
+AirGrid 1.0.6
+
+What's new:
+- Improved Android 15+ edge-to-edge display support for newer devices.
+- Updated system bar handling for better compatibility with target SDK 36.
+- Maintenance release with Play Console production-readiness fixes.

@@ -244,6 +244,42 @@ void main() {
       _expectRoundTrip(p, TransportCodec.decode(TransportCodec.encode(p)));
     });
 
+    test('rider control round-trip', () {
+      final p = AirGridPacket(
+        messageId: 'rider-control-1',
+        senderNodeId: 'node-alice',
+        senderName: 'Alice',
+        timestamp: 1700000000005,
+        content: 'encrypted-control',
+        seenByNodes: ['node-alice'],
+        hopLimit: 1,
+        packetType: 'rider_control',
+        conversationType: 'private',
+        recipientNodeId: 'node-bob',
+        senderPublicKey: 'public-key',
+        encryptionVersion: 1,
+      );
+      _expectRoundTrip(p, TransportCodec.decode(TransportCodec.encode(p)));
+    });
+
+    test('rider audio frame round-trip', () {
+      final p = AirGridPacket(
+        messageId: 'rider-frame-1',
+        senderNodeId: 'node-alice',
+        senderName: 'Alice',
+        timestamp: 1700000000006,
+        content: 'encrypted-frame',
+        seenByNodes: ['node-alice'],
+        hopLimit: 1,
+        packetType: 'rider_audio_frame',
+        conversationType: 'private',
+        recipientNodeId: 'node-bob',
+        senderPublicKey: 'public-key',
+        encryptionVersion: 1,
+      );
+      _expectRoundTrip(p, TransportCodec.decode(TransportCodec.encode(p)));
+    });
+
     test('fragment round-trip with all fragment fields', () {
       final p = AirGridPacket(
         messageId: 'frag-rt-1',

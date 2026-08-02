@@ -6,6 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  const validPrivateKey = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=';
+  const validPublicKey = 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=';
+
   // Setup mock secure storage for testing
   FlutterSecureStorage.setMockInitialValues({});
 
@@ -85,8 +88,8 @@ void main() {
     test('migrates legacy keys to secure storage', () async {
       // Simulate legacy keys in SharedPreferences
       SharedPreferences.setMockInitialValues({
-        'airgrid_private_key_b64': 'legacy_private_key_abc123',
-        'airgrid_public_key_b64': 'legacy_public_key_xyz789',
+        'airgrid_private_key_b64': validPrivateKey,
+        'airgrid_public_key_b64': validPublicKey,
         'airgrid_node_id': 'legacy-node-id-12345',
         'airgrid_display_name': 'Legacy User',
       });
@@ -94,8 +97,8 @@ void main() {
       final store = await LocalIdentityStore.create();
 
       // Keys should be migrated to secure storage
-      expect(store.publicKeyBase64, equals('legacy_public_key_xyz789'));
-      expect(store.privateKeyBase64, equals('legacy_private_key_abc123'));
+      expect(store.publicKeyBase64, equals(validPublicKey));
+      expect(store.privateKeyBase64, equals(validPrivateKey));
 
       // Node ID and display name should remain accessible
       expect(store.nodeId, equals('legacy-node-id-12345'));
@@ -103,27 +106,24 @@ void main() {
     });
 
     test('migration does NOT regenerate keys', () async {
-      const legacyPrivate = 'original_private_key_should_not_change';
-      const legacyPublic = 'original_public_key_should_not_change';
-
       SharedPreferences.setMockInitialValues({
-        'airgrid_private_key_b64': legacyPrivate,
-        'airgrid_public_key_b64': legacyPublic,
+        'airgrid_private_key_b64': validPrivateKey,
+        'airgrid_public_key_b64': validPublicKey,
       });
 
       final store = await LocalIdentityStore.create();
 
       // Keys MUST match legacy keys exactly (no regeneration)
-      expect(store.publicKeyBase64, equals(legacyPublic));
-      expect(store.privateKeyBase64, equals(legacyPrivate));
+      expect(store.publicKeyBase64, equals(validPublicKey));
+      expect(store.privateKeyBase64, equals(validPrivateKey));
     });
 
     test(
       'legacy keys are removed from SharedPreferences after migration',
       () async {
         SharedPreferences.setMockInitialValues({
-          'airgrid_private_key_b64': 'legacy_private',
-          'airgrid_public_key_b64': 'legacy_public',
+          'airgrid_private_key_b64': validPrivateKey,
+          'airgrid_public_key_b64': validPublicKey,
         });
 
         await LocalIdentityStore.create();
@@ -136,8 +136,8 @@ void main() {
 
     test('migration only happens once', () async {
       SharedPreferences.setMockInitialValues({
-        'airgrid_private_key_b64': 'legacy_private',
-        'airgrid_public_key_b64': 'legacy_public',
+        'airgrid_private_key_b64': validPrivateKey,
+        'airgrid_public_key_b64': validPublicKey,
       });
 
       final store1 = await LocalIdentityStore.create();
@@ -196,6 +196,22 @@ void main() {
       expect(store.publicKeyBase64, isNotNull);
       expect(store.privateKeyBase64, isNotNull);
       expect(store.publicKeyBase64, isNot(equals('orphaned_secure_public')));
+    });
+
+    test('regenerates keypair if secure storage has corrupt keys', () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'airgrid_secure_private_key_b64': 'Data has been reset',
+        'airgrid_secure_public_key_b64': 'not-valid-base64',
+      });
+
+      final store = await LocalIdentityStore.create();
+
+      expect(store.publicKeyBase64, isNotNull);
+      expect(store.privateKeyBase64, isNotNull);
+      expect(() => base64Decode(store.publicKeyBase64!), returnsNormally);
+      expect(() => base64Decode(store.privateKeyBase64!), returnsNormally);
+      expect(base64Decode(store.publicKeyBase64!).length, equals(32));
+      expect(base64Decode(store.privateKeyBase64!).length, equals(32));
     });
   });
 

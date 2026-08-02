@@ -19,3 +19,4 @@ logs/
 patch*.js
 patch*.dart
 fix_*.ps1
+test.txt

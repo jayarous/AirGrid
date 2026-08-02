@@ -78,7 +78,13 @@ class AirGridPacket {
       // counts packets rather than bytes, so it does not throttle this
       // proportionally — see the note in README under Routing Rules.
       (packetType == 'audio' && conversationType == 'public') ||
-      (conversationType == 'private' && encryptionVersion != null);
+      // Rider-mode control and audio-frame packets stay point-to-point: they
+      // are a live session between two handsets, so flooding them mesh-wide
+      // costs bandwidth no third node can use.
+      (conversationType == 'private' &&
+          encryptionVersion != null &&
+          packetType != 'rider_control' &&
+          packetType != 'rider_audio_frame');
 
   const AirGridPacket({
     required this.messageId,

@@ -111,6 +111,23 @@ build/app/outputs/bundle/release/app-release.aab
 The Settings screen reads app version from platform package info, so this
 workflow keeps the in-app version label aligned with the Play Console artifact.
 
+## Local Release Signing
+
+Release signing material must stay local and never be committed.
+
+1. Place your upload keystore on your machine, for example:
+  `../release-signing/airgrid-upload.jks` (relative to `airgrid/android/`).
+2. Create `airgrid/android/key.properties` with your local values:
+
+```properties
+storeFile=../release-signing/airgrid-upload.jks
+storePassword=YOUR_STORE_PASSWORD
+keyAlias=YOUR_KEY_ALIAS
+keyPassword=YOUR_KEY_PASSWORD
+```
+
+`android/key.properties` is git-ignored and should not be committed.
+
 ## Android Permissions
 
 AirGrid requests Nearby Connections permissions at runtime during onboarding.

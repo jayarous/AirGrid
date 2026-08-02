@@ -7,13 +7,17 @@ import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
 import 'package:airgrid/data/storage/privacy_settings_store.dart';
 import 'package:airgrid/data/storage/public_walkie_settings_store.dart';
+import 'package:airgrid/data/storage/rider_mode_settings_store.dart';
 import 'package:airgrid/data/storage/sqlite_message_repository.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
+import 'package:airgrid/features/rider/rider_mode_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
   final identityStore = await LocalIdentityStore.create();
   final messageRepo = await SqliteMessageRepository.open();
@@ -21,6 +25,8 @@ void main() async {
   final reportStore = await SharedPrefsLocalReportStore.create();
   final privacyStore = await SharedPrefsPrivacySettingsStore.create();
   final publicWalkieStore = await SharedPrefsPublicWalkieSettingsStore.create();
+  final riderModeSettingsStore =
+      await SharedPrefsRiderModeSettingsStore.create();
   final batteryStore = await SharedPrefsBatterySettingsStore.create();
   final chatListPreferencesStore =
       await SharedPrefsChatListPreferencesStore.create();
@@ -41,6 +47,9 @@ void main() async {
         localReportStoreProvider.overrideWithValue(reportStore),
         privacySettingsStoreProvider.overrideWithValue(privacyStore),
         publicWalkieSettingsStoreProvider.overrideWithValue(publicWalkieStore),
+        riderModeSettingsStoreProvider.overrideWithValue(
+          riderModeSettingsStore,
+        ),
         batterySettingsStoreProvider.overrideWithValue(batteryStore),
         chatListPreferencesStoreProvider.overrideWithValue(
           chatListPreferencesStore,
