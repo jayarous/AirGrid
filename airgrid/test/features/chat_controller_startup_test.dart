@@ -527,17 +527,57 @@ void main() {
     expect(prefsStore.currentShowClosedChats, isTrue);
   });
 
-  test('closePrivateChat closes thread and resets selected conversation', () async {
+  test(
+    'closePrivateChat closes thread and resets selected conversation',
+    () async {
+      final transport = FakeTransport();
+      final foreground = FakeForegroundService();
+      final playServices = FakePlayServices(
+        const PlayServicesStatus.available(),
+      );
+      final contacts = InMemoryKnownContactStore();
+      await contacts.upsert(
+        KnownContact(
+          nodeId: 'node-1',
+          displayName: 'Peer 1',
+          publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+          lastSeenAt: DateTime(2026, 1, 1),
+        ),
+      );
+      final container = _container(
+        transport: transport,
+        playServices: playServices,
+        foreground: foreground,
+        identity: await _identity(),
+        contactStore: contacts,
+      );
+      addTearDown(container.dispose);
+      addTearDown(foreground.dispose);
+
+      final controller = container.read(chatControllerProvider.notifier);
+      controller.selectConversation(
+        const PrivateConversation(peerNodeId: 'node-1', peerName: 'Peer 1'),
+      );
+
+      await controller.closePrivateChat('node-1');
+      final state = container.read(chatControllerProvider);
+      expect(contacts.isChatClosed('node-1'), isTrue);
+      expect(state.selectedConversation, isA<PublicConversation>());
+
+      await controller.reopenPrivateChat('node-1');
+      expect(contacts.isChatClosed('node-1'), isFalse);
+    },
+  );
+
+  test('concurrent stopMesh calls tear down exactly once', () async {
     final transport = FakeTransport();
     final foreground = FakeForegroundService();
-    final playServices = FakePlayServices(const PlayServicesStatus.available());
-    final contacts = InMemoryKnownContactStore();
-    await contacts.upsert(
-      KnownContact(
-        nodeId: 'node-1',
-        displayName: 'Peer 1',
-        publicKeyBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-        lastSeenAt: DateTime(2026, 1, 1),
+    final playServices = FakePlayServices(
+      const PlayServicesStatus(
+        available: true,
+        code: 'available',
+        message: 'available',
+        canResolve: false,
       ),
     );
     final container = _container(
@@ -545,23 +585,58 @@ void main() {
       playServices: playServices,
       foreground: foreground,
       identity: await _identity(),
-      contactStore: contacts,
     );
     addTearDown(container.dispose);
     addTearDown(foreground.dispose);
 
     final controller = container.read(chatControllerProvider.notifier);
-    controller.selectConversation(
-      const PrivateConversation(peerNodeId: 'node-1', peerName: 'Peer 1'),
+    await controller.startMesh();
+    expect(foreground.startCount, 1);
+
+    final stopsBefore = transport.stopCount;
+
+    // On device, the foreground-service exit request, the pending-exit action
+    // and direct UI teardown all raced here: each ran a full teardown, so one
+    // logical stop produced three transport stops and three service stops.
+    await Future.wait([
+      controller.stopMesh(),
+      controller.stopMesh(),
+      controller.stopMesh(),
+    ]);
+
+    expect(foreground.stopCount, 1);
+    expect(transport.stopCount, stopsBefore + 1);
+    expect(container.read(chatControllerProvider).meshStarted, isFalse);
+  });
+
+  test('stopMesh remains callable after an earlier stop completes', () async {
+    final transport = FakeTransport();
+    final foreground = FakeForegroundService();
+    final playServices = FakePlayServices(
+      const PlayServicesStatus(
+        available: true,
+        code: 'available',
+        message: 'available',
+        canResolve: false,
+      ),
     );
+    final container = _container(
+      transport: transport,
+      playServices: playServices,
+      foreground: foreground,
+      identity: await _identity(),
+    );
+    addTearDown(container.dispose);
+    addTearDown(foreground.dispose);
 
-    await controller.closePrivateChat('node-1');
-    final state = container.read(chatControllerProvider);
-    expect(contacts.isChatClosed('node-1'), isTrue);
-    expect(state.selectedConversation, isA<PublicConversation>());
+    final controller = container.read(chatControllerProvider.notifier);
+    await controller.startMesh();
 
-    await controller.reopenPrivateChat('node-1');
-    expect(contacts.isChatClosed('node-1'), isFalse);
+    // The reentrancy guard must not latch: a later, genuine stop still runs.
+    await controller.stopMesh();
+    await controller.stopMesh();
+
+    expect(foreground.stopCount, 2);
   });
 
   test('concurrent stopMesh calls tear down exactly once', () async {

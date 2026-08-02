@@ -14,6 +14,36 @@ import 'package:cryptography/cryptography.dart';
 class CryptoService {
   static final _x25519 = X25519();
   static final _chacha = Chacha20.poly1305Aead();
+  static final _sha256 = Sha256();
+
+  // ── Key fingerprints ─────────────────────────────────────────────────────
+
+  /// SHA-256 fingerprint of a base64 X25519 public key, formatted for humans
+  /// to read aloud or compare on screen: 16 uppercase hex chars in groups of
+  /// four, e.g. `A1B2 C3D4 E5F6 0718`.
+  ///
+  /// Truncated to 64 bits deliberately: long enough that forging a match is
+  /// impractical for an opportunistic attacker, short enough that two people
+  /// will actually compare it. Verification is out-of-band — the mesh cannot
+  /// vouch for a key it has only ever learned over the mesh.
+  ///
+  /// Returns null when [publicKeyBase64] is empty or not valid base64.
+  static Future<String?> fingerprint(String publicKeyBase64) async {
+    if (publicKeyBase64.isEmpty) return null;
+    final Uint8List bytes;
+    try {
+      bytes = base64Decode(publicKeyBase64);
+    } on FormatException {
+      return null;
+    }
+    final digest = await _sha256.hash(bytes);
+    final hex = digest.bytes
+        .take(8)
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join()
+        .toUpperCase();
+    return RegExp(r'.{1,4}').allMatches(hex).map((m) => m.group(0)!).join(' ');
+  }
 
   final Map<String, SimplePublicKey> _keyCache = {};
   final Map<String, Future<SecretKey>> _sharedSecretCache = {};

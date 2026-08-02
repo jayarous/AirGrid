@@ -393,7 +393,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               child: _QuickActions(
                 onOpenPublicChat: _openPublicChat,
                 onOpenNearby: () => unawaited(
-                    Navigator.of(context).pushNamed(AppRouter.nearby)),
+                  Navigator.of(context).pushNamed(AppRouter.nearby),
+                ),
                 onOpenWalkie: _openWalkie,
               ),
             ),
@@ -453,6 +454,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                                 profileIconId: contact?.profileIconId,
                                 profileStatus: contact?.profileStatus,
                                 isOnline: true,
+                                publicKeyBase64: contact?.publicKeyBase64,
                               ),
                             );
                           },
@@ -493,14 +495,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           hoverElevation: 6,
           focusElevation: 6,
           highlightElevation: 8,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           onPressed: _openPublicChat,
           icon: const Icon(Icons.forum_rounded),
           label: const Text(
             'Public Chat',
-            style:
-                TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.2),
+            style: TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.2),
           ),
         ),
       ),
@@ -858,10 +860,13 @@ class _PeerTile extends StatelessWidget {
         child: ListTile(
           onTap: onTap,
           onLongPress: onLongPress,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 8,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           leading: Container(
             width: 48,
             height: 48,
@@ -888,8 +893,7 @@ class _PeerTile extends StatelessWidget {
                 : canMessage
                 ? 'Private chat available'
                 : 'Finishing setup',
-            style:
-                TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
           ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,

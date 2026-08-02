@@ -58,10 +58,9 @@ class HelpTarget extends ConsumerWidget {
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .primary
-                                  .withAlpha(100),
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.primary.withAlpha(100),
                               blurRadius: 4,
                               offset: const Offset(0, 1),
                             ),
@@ -113,16 +112,14 @@ class HelpTarget extends ConsumerWidget {
               ),
               Row(
                 children: [
-                  Icon(Icons.help_outline,
-                      size: 22, color: cs.primary),
+                  Icon(Icons.help_outline, size: 22, color: cs.primary),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       title,
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w800),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -136,9 +133,9 @@ class HelpTarget extends ConsumerWidget {
               Text(
                 description,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: cs.onSurfaceVariant,
-                      height: 1.4,
-                    ),
+                  color: cs.onSurfaceVariant,
+                  height: 1.4,
+                ),
               ),
               if (learnMore != null) ...[
                 const SizedBox(height: 16),
@@ -194,10 +191,9 @@ class HelpTarget extends ConsumerWidget {
                   Expanded(
                     child: Text(
                       'More details',
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w800),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -212,9 +208,9 @@ class HelpTarget extends ConsumerWidget {
                 child: Text(
                   content,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: cs.onSurfaceVariant,
-                        height: 1.5,
-                      ),
+                    color: cs.onSurfaceVariant,
+                    height: 1.5,
+                  ),
                 ),
               ),
             ],

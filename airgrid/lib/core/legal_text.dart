@@ -2,8 +2,7 @@ class LegalText {
   LegalText._();
 
   static const termsVersion = '2026-06-07';
-  static const termsUrl =
-      'https://airgridmessenger.netlify.app/#terms-of-use';
+  static const termsUrl = 'https://airgridmessenger.netlify.app/#terms-of-use';
   static const privacyUrl =
       'https://airgridmessenger.netlify.app/#privacy-policy';
   static const supportEmail = 'jayarous@gmail.com';
@@ -70,7 +69,7 @@ class LegalText {
     LegalSection(
       'Contact',
       'Questions about these terms, privacy, or safety can be sent to '
-      '$supportEmail.',
+          '$supportEmail.',
     ),
   ];
 }

@@ -134,23 +134,23 @@ void main() {
     controller.setWalkieLastError('mesh offline');
 
     var state = container.read(chatControllerProvider);
-    expect(state.walkiePeerNodeId, _privatePeerNodeId);
-    expect(state.walkieIsTransmitting, isTrue);
-    expect(state.walkieIsSending, isTrue);
-    expect(state.walkieLastError, 'mesh offline');
+    expect(state.walkie.peerNodeId, _privatePeerNodeId);
+    expect(state.walkie.isTransmitting, isTrue);
+    expect(state.walkie.isSending, isTrue);
+    expect(state.walkie.lastError, 'mesh offline');
 
     controller.setWalkieTransmitting(isTransmitting: false);
     controller.setWalkieSending(isSending: false);
     controller.setWalkieLastError(null);
 
     state = container.read(chatControllerProvider);
-    expect(state.walkieIsTransmitting, isFalse);
-    expect(state.walkieIsSending, isFalse);
-    expect(state.walkieLastError, isNull);
+    expect(state.walkie.isTransmitting, isFalse);
+    expect(state.walkie.isSending, isFalse);
+    expect(state.walkie.lastError, isNull);
   });
 
   test(
-    'selectConversation syncs walkiePeerNodeId for private threads',
+    'selectConversation syncs walkie.peerNodeId for private threads',
     () async {
       final container = _container(identity: await _identity());
       addTearDown(container.dispose);
@@ -162,12 +162,12 @@ void main() {
       );
 
       var state = container.read(chatControllerProvider);
-      expect(state.walkiePeerNodeId, 'peer-42');
+      expect(state.walkie.peerNodeId, 'peer-42');
 
       controller.selectConversation(const PublicConversation());
 
       state = container.read(chatControllerProvider);
-      expect(state.walkiePeerNodeId, isNull);
+      expect(state.walkie.peerNodeId, isNull);
     },
   );
 
@@ -193,9 +193,9 @@ void main() {
     await controller.stopMesh();
 
     final state = container.read(chatControllerProvider);
-    expect(state.walkieIsTransmitting, isFalse);
-    expect(state.walkieIsSending, isFalse);
-    expect(state.walkieLastError, isNull);
+    expect(state.walkie.isTransmitting, isFalse);
+    expect(state.walkie.isSending, isFalse);
+    expect(state.walkie.lastError, isNull);
     expect(transport.stopCount, 1);
     expect(foreground.stopCount, 1);
   });
@@ -227,9 +227,9 @@ void main() {
 
     expect(ok, isTrue);
     final state = container.read(chatControllerProvider);
-    expect(state.walkieInviteSessionId, isNotNull);
-    expect(state.walkieInvitePeerNodeId, _privatePeerNodeId);
-    expect(state.walkieInviteIsIncoming, isFalse);
+    expect(state.walkie.inviteSessionId, isNotNull);
+    expect(state.walkie.invitePeerNodeId, _privatePeerNodeId);
+    expect(state.walkie.inviteIsIncoming, isFalse);
     expect(transport.sentPayloads, isNotEmpty);
   });
 
@@ -264,16 +264,16 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       var state = container.read(chatControllerProvider);
-      expect(state.walkieInvitePeerNodeId, _privatePeerNodeId);
-      expect(state.walkieInviteIsIncoming, isTrue);
+      expect(state.walkie.invitePeerNodeId, _privatePeerNodeId);
+      expect(state.walkie.inviteIsIncoming, isTrue);
 
       final ok = await controller.acceptWalkieInvite();
 
       expect(ok, isTrue);
       state = container.read(chatControllerProvider);
-      expect(state.walkieSessionActivePeerNodeId, _privatePeerNodeId);
-      expect(state.walkiePeerNodeId, _privatePeerNodeId);
-      expect(state.walkieInvitePeerNodeId, isNull);
+      expect(state.walkie.sessionActivePeerNodeId, _privatePeerNodeId);
+      expect(state.walkie.peerNodeId, _privatePeerNodeId);
+      expect(state.walkie.invitePeerNodeId, isNull);
       expect(
         decodeSentPackets(
           transport,
@@ -310,7 +310,8 @@ void main() {
     expect(await controller.sendWalkieInvite(peer), isTrue);
     final sessionId = container
         .read(chatControllerProvider)
-        .walkieInviteSessionId;
+        .walkie
+        .inviteSessionId;
     expect(sessionId, isNotNull);
 
     _receiveWalkieControl(
@@ -325,9 +326,9 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     final state = container.read(chatControllerProvider);
-    expect(state.walkieSessionActivePeerNodeId, _privatePeerNodeId);
-    expect(state.walkiePeerNodeId, _privatePeerNodeId);
-    expect(state.walkieInvitePeerNodeId, isNull);
+    expect(state.walkie.sessionActivePeerNodeId, _privatePeerNodeId);
+    expect(state.walkie.peerNodeId, _privatePeerNodeId);
+    expect(state.walkie.invitePeerNodeId, isNull);
     expect(state.selectedConversation, isA<PrivateConversation>());
   });
 
@@ -358,7 +359,8 @@ void main() {
     expect(await controller.sendWalkieInvite(peer), isTrue);
     final sessionId = container
         .read(chatControllerProvider)
-        .walkieInviteSessionId;
+        .walkie
+        .inviteSessionId;
     expect(sessionId, isNotNull);
     _receiveWalkieControl(
       transport,
@@ -388,11 +390,11 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     final state = container.read(chatControllerProvider);
-    expect(state.walkieSessionActivePeerNodeId, isNull);
-    expect(state.walkieInvitePeerNodeId, isNull);
-    expect(state.walkieIsTransmitting, isFalse);
-    expect(state.walkieIsSending, isFalse);
-    expect(state.walkieLastError, 'Alex ended the walkie session');
+    expect(state.walkie.sessionActivePeerNodeId, isNull);
+    expect(state.walkie.invitePeerNodeId, isNull);
+    expect(state.walkie.isTransmitting, isFalse);
+    expect(state.walkie.isSending, isFalse);
+    expect(state.walkie.lastError, 'Alex ended the walkie session');
   });
 
   test('peer disconnect clears active private walkie session', () async {
@@ -422,7 +424,8 @@ void main() {
     expect(await controller.sendWalkieInvite(peer), isTrue);
     final sessionId = container
         .read(chatControllerProvider)
-        .walkieInviteSessionId;
+        .walkie
+        .inviteSessionId;
     expect(sessionId, isNotNull);
     _receiveWalkieControl(
       transport,
@@ -445,11 +448,11 @@ void main() {
 
     final state = container.read(chatControllerProvider);
     expect(state.peers, isEmpty);
-    expect(state.walkieSessionActivePeerNodeId, isNull);
-    expect(state.walkieInvitePeerNodeId, isNull);
-    expect(state.walkieIsTransmitting, isFalse);
-    expect(state.walkieIsSending, isFalse);
-    expect(state.walkieLastError, 'Private walkie peer disconnected');
+    expect(state.walkie.sessionActivePeerNodeId, isNull);
+    expect(state.walkie.invitePeerNodeId, isNull);
+    expect(state.walkie.isTransmitting, isFalse);
+    expect(state.walkie.isSending, isFalse);
+    expect(state.walkie.lastError, 'Private walkie peer disconnected');
   });
 
   test(
@@ -481,7 +484,8 @@ void main() {
       expect(await controller.sendWalkieInvite(peer), isTrue);
       final sessionId = container
           .read(chatControllerProvider)
-          .walkieInviteSessionId;
+          .walkie
+          .inviteSessionId;
       expect(sessionId, isNotNull);
       _receiveWalkieControl(
         transport,

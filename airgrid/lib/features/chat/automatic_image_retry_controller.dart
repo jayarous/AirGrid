@@ -52,7 +52,8 @@ class AutomaticImageRetryController {
 
   final bool Function() _isDisposed;
   final AirGridMessage? Function(String messageId) _messageById;
-  final void Function(String messageId, DeliveryStatus status) _forceStatusUpdate;
+  final void Function(String messageId, DeliveryStatus status)
+  _forceStatusUpdate;
   final Future<bool> Function(AirGridMessage message) _retryAttempt;
   final AutomaticImageRetryConfig Function() _config;
 
@@ -135,7 +136,9 @@ class AutomaticImageRetryController {
 
   bool _hasRecoverablePayload(AirGridMessage message) {
     final tempPath = message.mediaTempPath;
-    if (tempPath != null && tempPath.isNotEmpty && File(tempPath).existsSync()) {
+    if (tempPath != null &&
+        tempPath.isNotEmpty &&
+        File(tempPath).existsSync()) {
       return true;
     }
 
@@ -155,18 +158,18 @@ class AutomaticImageRetryController {
       return;
     }
 
-    final retryState = _retries.putIfAbsent(messageId, _AutomaticImageRetryState.new);
+    final retryState = _retries.putIfAbsent(
+      messageId,
+      _AutomaticImageRetryState.new,
+    );
     if (resetAttempts) {
       retryState.attempts = 0;
     }
     retryState.cancel();
-    retryState.timer = Timer(
-      delay ?? _config().ackTimeout,
-      () {
-        if (_isDisposed()) return;
-        unawaited(_handleTimeout(messageId));
-      },
-    );
+    retryState.timer = Timer(delay ?? _config().ackTimeout, () {
+      if (_isDisposed()) return;
+      unawaited(_handleTimeout(messageId));
+    });
   }
 
   Future<void> _handleTimeout(String messageId) async {

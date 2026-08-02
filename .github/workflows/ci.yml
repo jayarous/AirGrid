@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: airgrid
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+  # Fails the build if signing material or device logs are ever re-committed.
+  # The root .gitignore is the first line of defence; this is the backstop.
+  secrets-guard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject tracked signing material and logs
+        run: |
+          matches=$(git ls-files | grep -E '\.(jks|keystore|p12)$|(^|/)key\.properties$|(^|/)logs/' || true)
+          if [ -n "$matches" ]; then
+            echo "::error::Signing material or device logs are tracked in git:"
+            echo "$matches"
+            exit 1
+          fi
+          echo "No signing material or device logs tracked."

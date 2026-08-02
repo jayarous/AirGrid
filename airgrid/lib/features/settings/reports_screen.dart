@@ -97,9 +97,10 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
           return Column(
             children: [
               Expanded(
-                child: ListView.builder(
+                child: ListView.separated(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                   itemCount: reports.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     final report = reports[index];
                     final ts = report.timestamp;

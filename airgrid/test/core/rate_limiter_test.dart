@@ -4,10 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('RateLimiter', () {
     test('allows burst capacity immediately', () {
-      final limiter = RateLimiter(
-        burstCapacity: 3,
-        tokensPerSecond: 1.0,
-      );
+      final limiter = RateLimiter(burstCapacity: 3, tokensPerSecond: 1.0);
 
       expect(limiter.allow(), true);
       expect(limiter.allow(), true);
@@ -63,10 +60,7 @@ void main() {
     });
 
     test('retryAfter returns zero when tokens available', () {
-      final limiter = RateLimiter(
-        burstCapacity: 5,
-        tokensPerSecond: 1.0,
-      );
+      final limiter = RateLimiter(burstCapacity: 5, tokensPerSecond: 1.0);
 
       expect(limiter.retryAfter(), Duration.zero);
     });
@@ -91,10 +85,7 @@ void main() {
     });
 
     test('reset restores full capacity', () {
-      final limiter = RateLimiter(
-        burstCapacity: 3,
-        tokensPerSecond: 1.0,
-      );
+      final limiter = RateLimiter(burstCapacity: 3, tokensPerSecond: 1.0);
 
       // Consume all tokens
       expect(limiter.allow(), true);
@@ -255,10 +246,7 @@ void main() {
         cooldown: const Duration(seconds: 5),
       );
 
-      expect(
-        tracker.shouldAccept('node-1', 'publicKey123'),
-        true,
-      );
+      expect(tracker.shouldAccept('node-1', 'publicKey123'), true);
     });
 
     test('rejects key announce within cooldown period', () {

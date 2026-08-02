@@ -15,7 +15,10 @@ void main() {
     test('outbound messages are rate limited at 5/sec burst 10', () async {
       var now = DateTime(2026, 5, 27, 10, 0, 0);
       final identAlice = await CryptoTestIdentity.generate('Alice');
-      final nodeAlice = await harness.addNode(identAlice, spoolClock: () => now);
+      final nodeAlice = await harness.addNode(
+        identAlice,
+        spoolClock: () => now,
+      );
 
       // Should allow burst of 10 messages immediately
       for (var i = 0; i < 10; i++) {
@@ -70,15 +73,17 @@ void main() {
       final identAlice = await CryptoTestIdentity.generate('Alice');
       final identBob = await CryptoTestIdentity.generate('Bob');
 
-      final nodeAlice = await harness.addNode(identAlice, spoolClock: () => now);
+      final nodeAlice = await harness.addNode(
+        identAlice,
+        spoolClock: () => now,
+      );
       final nodeBob = await harness.addNode(identBob, spoolClock: () => now);
 
       await harness.connect(identAlice.nodeId, identBob.nodeId);
 
       // Bob's key should be cached at Alice
       expect(
-        nodeAlice.service.knownContacts
-            .any((c) => c.nodeId == identBob.nodeId),
+        nodeAlice.service.knownContacts.any((c) => c.nodeId == identBob.nodeId),
         true,
       );
 
@@ -102,8 +107,7 @@ void main() {
 
       // Contact should still be present (not deleted by suppression)
       expect(
-        nodeAlice.service.knownContacts
-            .any((c) => c.nodeId == identBob.nodeId),
+        nodeAlice.service.knownContacts.any((c) => c.nodeId == identBob.nodeId),
         true,
       );
     });
@@ -113,7 +117,10 @@ void main() {
       final identAlice = await CryptoTestIdentity.generate('Alice');
       final identBob = await CryptoTestIdentity.generate('Bob');
 
-      final nodeAlice = await harness.addNode(identAlice, spoolClock: () => now);
+      final nodeAlice = await harness.addNode(
+        identAlice,
+        spoolClock: () => now,
+      );
       final nodeBob = await harness.addNode(identBob, spoolClock: () => now);
 
       await harness.connect(identAlice.nodeId, identBob.nodeId);
@@ -122,7 +129,9 @@ void main() {
       final receivedStatusByAlice = <dynamic>[];
 
       final subBob = nodeBob.service.messageStream.listen(receivedByBob.add);
-      final subAlice = nodeAlice.service.statusStream.listen(receivedStatusByAlice.add);
+      final subAlice = nodeAlice.service.statusStream.listen(
+        receivedStatusByAlice.add,
+      );
 
       // Alice sends 5 private messages to Bob
       final messageIds = <String>[];
@@ -138,22 +147,21 @@ void main() {
 
       // Bob should have received all 5
       expect(receivedByBob.length, 5);
-      messageIds.addAll(
-        receivedByBob.map((m) => m.id),
-      );
+      messageIds.addAll(receivedByBob.map((m) => m.id));
 
       // Bob sends read receipts in 4 batches (should allow 3, block 4th)
       for (var i = 0; i < 4; i++) {
-        await nodeBob.service.sendReadReceipts(
-          identAlice.nodeId,
-          [messageIds[i]],
-        );
+        await nodeBob.service.sendReadReceipts(identAlice.nodeId, [
+          messageIds[i],
+        ]);
         await harness.settle();
       }
 
       // Alice should receive receipts for first 3 messages only
       expect(
-        receivedStatusByAlice.where((s) => s.status == DeliveryStatus.read).length,
+        receivedStatusByAlice
+            .where((s) => s.status == DeliveryStatus.read)
+            .length,
         3,
       );
 
@@ -161,14 +169,15 @@ void main() {
       now = now.add(const Duration(seconds: 1));
 
       // Bob sends final batch (should be accepted)
-      await nodeBob.service.sendReadReceipts(
-        identAlice.nodeId,
-        [messageIds[3]],
-      );
+      await nodeBob.service.sendReadReceipts(identAlice.nodeId, [
+        messageIds[3],
+      ]);
       await harness.settle();
 
       expect(
-        receivedStatusByAlice.where((s) => s.status == DeliveryStatus.read).length,
+        receivedStatusByAlice
+            .where((s) => s.status == DeliveryStatus.read)
+            .length,
         4,
       );
 
@@ -182,9 +191,15 @@ void main() {
       final identBob = await CryptoTestIdentity.generate('Bob');
       final identCarol = await CryptoTestIdentity.generate('Carol');
 
-      final nodeAlice = await harness.addNode(identAlice, spoolClock: () => now);
+      final nodeAlice = await harness.addNode(
+        identAlice,
+        spoolClock: () => now,
+      );
       final nodeBob = await harness.addNode(identBob, spoolClock: () => now);
-      final nodeCarol = await harness.addNode(identCarol, spoolClock: () => now);
+      final nodeCarol = await harness.addNode(
+        identCarol,
+        spoolClock: () => now,
+      );
 
       await harness.connect(identAlice.nodeId, identBob.nodeId);
       await harness.connect(identAlice.nodeId, identCarol.nodeId);
@@ -199,12 +214,7 @@ void main() {
       await harness.settle();
 
       // Alice should receive all 10 from Bob
-      expect(
-        receivedByAlice
-            .where((m) => m.senderName == 'Bob')
-            .length,
-        10,
-      );
+      expect(receivedByAlice.where((m) => m.senderName == 'Bob').length, 10);
 
       // Carol should still have full capacity (independent outbound limiter)
       for (var i = 0; i < 10; i++) {
@@ -213,12 +223,7 @@ void main() {
       await harness.settle();
 
       // Alice should receive all 10 from Carol (independent inbound limiter per peer)
-      expect(
-        receivedByAlice
-            .where((m) => m.senderName == 'Carol')
-            .length,
-        10,
-      );
+      expect(receivedByAlice.where((m) => m.senderName == 'Carol').length, 10);
 
       await sub.cancel();
     });
@@ -226,7 +231,10 @@ void main() {
     test('outbound rate limiter resets correctly', () async {
       var now = DateTime(2026, 5, 27, 10, 0, 0);
       final identAlice = await CryptoTestIdentity.generate('Alice');
-      final nodeAlice = await harness.addNode(identAlice, spoolClock: () => now);
+      final nodeAlice = await harness.addNode(
+        identAlice,
+        spoolClock: () => now,
+      );
 
       // Exhaust burst capacity (10 messages)
       for (var i = 0; i < 10; i++) {

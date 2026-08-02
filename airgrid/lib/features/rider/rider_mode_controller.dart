@@ -462,7 +462,10 @@ class RiderModeController extends Notifier<RiderModeState> {
     final now = DateTime.now();
     if (now.difference(_lastLevelUpdate) >= _levelUpdateInterval) {
       _lastLevelUpdate = now;
-      state = state.copyWith(inputLevel: normalized, isSendingVoice: shouldSend);
+      state = state.copyWith(
+        inputLevel: normalized,
+        isSendingVoice: shouldSend,
+      );
     }
     if (!shouldSend) return;
     if (_frameSendInFlight) return;

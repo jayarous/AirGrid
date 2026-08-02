@@ -193,7 +193,7 @@ void main() {
       tester.element(find.byType(WalkieScreen)),
     );
     expect(
-      container.read(chatControllerProvider).publicWalkieStayOnline,
+      container.read(chatControllerProvider).walkie.publicStayOnline,
       isFalse,
     );
 
@@ -203,7 +203,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      container.read(chatControllerProvider).publicWalkieStayOnline,
+      container.read(chatControllerProvider).walkie.publicStayOnline,
       isTrue,
     );
 
@@ -213,7 +213,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      container.read(chatControllerProvider).publicWalkieStayOnline,
+      container.read(chatControllerProvider).walkie.publicStayOnline,
       isFalse,
     );
   });

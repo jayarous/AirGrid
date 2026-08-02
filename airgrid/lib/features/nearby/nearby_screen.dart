@@ -104,7 +104,9 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
               isSharing: state.isLocationSharing,
               status: state.locationStatus,
               onToggle: state.isLocationSharing
-                  ? ref.read(chatControllerProvider.notifier).stopLocationSharing
+                  ? ref
+                        .read(chatControllerProvider.notifier)
+                        .stopLocationSharing
                   : ref
                         .read(chatControllerProvider.notifier)
                         .startLocationSharing,
@@ -176,26 +178,27 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
                               );
                           Navigator.of(context).pushNamed(AppRouter.walkie);
                         },
-                  isTrusted: peer.nodeId != null &&
+                  isTrusted:
+                      peer.nodeId != null &&
                       state.trustedNodeIds.contains(peer.nodeId),
                   onTrust: peer.nodeId == null
                       ? null
                       : () => ref
-                          .read(chatControllerProvider.notifier)
-                          .trustContact(peer.nodeId!),
+                            .read(chatControllerProvider.notifier)
+                            .trustContact(peer.nodeId!),
                   onUntrust: peer.nodeId == null
                       ? null
                       : () => ref
-                          .read(chatControllerProvider.notifier)
-                          .untrustContact(peer.nodeId!),
+                            .read(chatControllerProvider.notifier)
+                            .untrustContact(peer.nodeId!),
                   onReport: peer.nodeId == null
                       ? null
                       : () => _showReportUserDialog(
-                            context,
-                            ref,
-                            peer.nodeId!,
-                            peer.displayName,
-                          ),
+                          context,
+                          ref,
+                          peer.nodeId!,
+                          peer.displayName,
+                        ),
                   onBlock: peer.nodeId == null
                       ? null
                       : () async {
@@ -263,12 +266,7 @@ void _showReportUserDialog(
               isExpanded: true,
               value: selectedReason,
               items: ReportReason.values
-                  .map(
-                    (r) => DropdownMenuItem(
-                      value: r,
-                      child: Text(r.label),
-                    ),
-                  )
+                  .map((r) => DropdownMenuItem(value: r, child: Text(r.label)))
                   .toList(),
               onChanged: (r) {
                 if (r != null) setState(() => selectedReason = r);
@@ -293,7 +291,9 @@ void _showReportUserDialog(
           FilledButton(
             onPressed: () {
               Navigator.pop(ctx);
-              ref.read(chatControllerProvider.notifier).reportUser(
+              ref
+                  .read(chatControllerProvider.notifier)
+                  .reportUser(
                     reportedNodeId: reportedNodeId,
                     reportedDisplayName: reportedDisplayName,
                     reason: selectedReason,
@@ -301,9 +301,9 @@ void _showReportUserDialog(
                         ? null
                         : notesController.text.trim(),
                   );
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Report submitted')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Report submitted')));
             },
             child: const Text('Submit'),
           ),
@@ -313,7 +313,10 @@ void _showReportUserDialog(
   );
 }
 
-double _maxVisibleDistanceMetersHelper(PeerLocation? localLocation, Map<String, PeerLocation> peerLocations) {
+double _maxVisibleDistanceMetersHelper(
+  PeerLocation? localLocation,
+  Map<String, PeerLocation> peerLocations,
+) {
   final local = localLocation;
   if (local == null) return 100;
   final distances = peerLocations.values
@@ -615,7 +618,10 @@ class _RadarPainter extends CustomPainter {
     canvas.drawCircle(center, 18, Paint()..color = primary.withAlpha(28));
     _drawCenteredText(canvas, 'You', center.translate(0, 28), onSurface, 12);
 
-    final maxDistance = _maxVisibleDistanceMetersHelper(localLocation, peerLocations);
+    final maxDistance = _maxVisibleDistanceMetersHelper(
+      localLocation,
+      peerLocations,
+    );
     for (var i = 0; i < peers.length; i++) {
       final peer = peers[i];
       final peerLocation = peer.nodeId == null
@@ -872,19 +878,19 @@ class _NearbyPeerTile extends StatelessWidget {
           backgroundColor: isSelected
               ? cs.primary
               : (peer.encryptionReady
-                  ? cs.tertiaryContainer
-                  : cs.primaryContainer),
+                    ? cs.tertiaryContainer
+                    : cs.primaryContainer),
           child: Icon(
             isSelected
                 ? Icons.person_pin_circle
                 : (peer.encryptionReady
-                    ? Icons.lock_outline
-                    : Icons.person_pin_circle),
+                      ? Icons.lock_outline
+                      : Icons.person_pin_circle),
             color: isSelected
                 ? cs.onPrimary
                 : (peer.encryptionReady
-                    ? cs.onTertiaryContainer
-                    : cs.onPrimaryContainer),
+                      ? cs.onTertiaryContainer
+                      : cs.onPrimaryContainer),
           ),
         ),
         title: Text(
@@ -927,6 +933,7 @@ class _NearbyPeerTile extends StatelessWidget {
                       profileIconId: contactProfile?.profileIconId,
                       profileStatus: contactProfile?.profileStatus,
                       isOnline: true,
+                      publicKeyBase64: contactProfile?.publicKeyBase64,
                     ),
                   );
                 },

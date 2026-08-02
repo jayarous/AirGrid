@@ -5,6 +5,7 @@ import 'package:airgrid/domain/models/airgrid_message.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_state.dart';
+import 'package:airgrid/features/walkie/walkie_state.dart';
 import 'package:uuid/uuid.dart';
 
 const _walkieControlKind = 'walkie_control';
@@ -18,10 +19,7 @@ class WalkieControlMessage {
   final String action;
   final String sessionId;
 
-  const WalkieControlMessage({
-    required this.action,
-    required this.sessionId,
-  });
+  const WalkieControlMessage({required this.action, required this.sessionId});
 
   String toWire() => jsonEncode({
     'kind': _walkieControlKind,
@@ -72,18 +70,27 @@ class WalkieSessionController {
   final bool Function(String nodeId) _isTrustedNode;
   final bool Function(String nodeId) _isWalkieAlwaysOn;
 
+  /// Applies [update] to the walkie slice of the current state.
+  ///
+  /// Every write in this controller touches only [WalkieState], so routing them
+  /// through one helper keeps the nested `copyWith` out of each call site.
+  void _updateWalkie(WalkieState Function(WalkieState walkie) update) {
+    final state = _readState();
+    _writeState(state.copyWith(walkie: update(state.walkie)));
+  }
+
   Future<bool> sendInvite(MeshPeer peer) async {
     final nodeId = peer.nodeId;
     if (nodeId == null) return false;
 
     final sessionId = const Uuid().v4();
-    _writeState(
-      _readState().copyWith(
-        walkieInviteSessionId: sessionId,
-        walkieInvitePeerNodeId: nodeId,
-        walkieInviteIsIncoming: false,
-        walkiePeerNodeId: nodeId,
-        clearWalkieLastError: true,
+    _updateWalkie(
+      (w) => w.copyWith(
+        inviteSessionId: sessionId,
+        invitePeerNodeId: nodeId,
+        inviteIsIncoming: false,
+        peerNodeId: nodeId,
+        clearLastError: true,
       ),
     );
 
@@ -101,11 +108,11 @@ class WalkieSessionController {
       return true;
     }
 
-    _writeState(
-      _readState().copyWith(
-        walkieLastError: 'Failed to send invite',
-        clearWalkieInvite: true,
-        clearWalkieSessionActivePeerNodeId: true,
+    _updateWalkie(
+      (w) => w.copyWith(
+        lastError: 'Failed to send invite',
+        clearInvite: true,
+        clearSessionActivePeerNodeId: true,
       ),
     );
     return false;
@@ -113,8 +120,8 @@ class WalkieSessionController {
 
   Future<bool> acceptInvite() async {
     final state = _readState();
-    final invitePeerId = state.walkieInvitePeerNodeId;
-    final sessionId = state.walkieInviteSessionId;
+    final invitePeerId = state.walkie.invitePeerNodeId;
+    final sessionId = state.walkie.inviteSessionId;
     if (invitePeerId == null || sessionId == null) return false;
 
     final peer = _findPeer(invitePeerId);
@@ -131,16 +138,16 @@ class WalkieSessionController {
 
     if (result != PrivateSendResult.sentEncrypted &&
         result != PrivateSendResult.sentPlaintext) {
-      _writeState(_readState().copyWith(walkieLastError: 'Failed to accept invite'));
+      _updateWalkie((w) => w.copyWith(lastError: 'Failed to accept invite'));
       return false;
     }
 
-    _writeState(
-      _readState().copyWith(
-        walkieSessionActivePeerNodeId: invitePeerId,
-        walkiePeerNodeId: invitePeerId,
-        clearWalkieInvite: true,
-        clearWalkieLastError: true,
+    _updateWalkie(
+      (w) => w.copyWith(
+        sessionActivePeerNodeId: invitePeerId,
+        peerNodeId: invitePeerId,
+        clearInvite: true,
+        clearLastError: true,
       ),
     );
     return true;
@@ -148,15 +155,15 @@ class WalkieSessionController {
 
   Future<bool> declineInvite() async {
     final state = _readState();
-    final invitePeerId = state.walkieInvitePeerNodeId;
-    final sessionId = state.walkieInviteSessionId;
+    final invitePeerId = state.walkie.invitePeerNodeId;
+    final sessionId = state.walkie.inviteSessionId;
     if (invitePeerId == null || sessionId == null) {
       return false;
     }
 
     final peer = _findPeer(invitePeerId);
     if (peer == null) {
-      _writeState(_readState().copyWith(clearWalkieInvite: true));
+      _updateWalkie((w) => w.copyWith(clearInvite: true));
       return false;
     }
 
@@ -169,16 +176,14 @@ class WalkieSessionController {
       allowPlaintextFallback: true,
     );
 
-    _writeState(
-      _readState().copyWith(clearWalkieInvite: true, clearWalkieLastError: true),
-    );
+    _updateWalkie((w) => w.copyWith(clearInvite: true, clearLastError: true));
     return true;
   }
 
   Future<bool> cancelInvite() async {
     final state = _readState();
-    final invitePeerId = state.walkieInvitePeerNodeId;
-    final sessionId = state.walkieInviteSessionId;
+    final invitePeerId = state.walkie.invitePeerNodeId;
+    final sessionId = state.walkie.inviteSessionId;
     if (invitePeerId == null || sessionId == null) return false;
 
     final peer = _findPeer(invitePeerId);
@@ -193,11 +198,11 @@ class WalkieSessionController {
       );
     }
 
-    _writeState(
-      _readState().copyWith(
-        clearWalkieInvite: true,
-        clearWalkieSessionActivePeerNodeId: true,
-        clearWalkieLastError: true,
+    _updateWalkie(
+      (w) => w.copyWith(
+        clearInvite: true,
+        clearSessionActivePeerNodeId: true,
+        clearLastError: true,
       ),
     );
     return true;
@@ -205,21 +210,19 @@ class WalkieSessionController {
 
   Future<bool> endSession() async {
     final state = _readState();
-    final activePeerId = state.walkieSessionActivePeerNodeId;
+    final activePeerId = state.walkie.sessionActivePeerNodeId;
     if (activePeerId == null) {
-      _writeState(
-        _readState().copyWith(
-          clearWalkieInvite: true,
-          clearWalkieSessionActivePeerNodeId: true,
-        ),
+      _updateWalkie(
+        (w) =>
+            w.copyWith(clearInvite: true, clearSessionActivePeerNodeId: true),
       );
       return false;
     }
 
-    // walkieInviteSessionId is cleared on accept, so fall back to activePeerId
-    // as the session token. The receiver matches on walkieSessionActivePeerNodeId
-    // as well, so the message will always be processed correctly.
-    final sessionId = state.walkieInviteSessionId ?? activePeerId;
+    // inviteSessionId is cleared on accept, so fall back to activePeerId as the
+    // session token. The receiver matches on sessionActivePeerNodeId as well,
+    // so the message will always be processed correctly.
+    final sessionId = state.walkie.inviteSessionId ?? activePeerId;
 
     final peer = _findPeer(activePeerId);
     if (peer != null) {
@@ -233,11 +236,11 @@ class WalkieSessionController {
       );
     }
 
-    _writeState(
-      _readState().copyWith(
-        clearWalkieInvite: true,
-        clearWalkieSessionActivePeerNodeId: true,
-        clearWalkieLastError: true,
+    _updateWalkie(
+      (w) => w.copyWith(
+        clearInvite: true,
+        clearSessionActivePeerNodeId: true,
+        clearLastError: true,
       ),
     );
     return true;
@@ -252,13 +255,13 @@ class WalkieSessionController {
 
     switch (control.action) {
       case _walkieControlActionInvite:
-        _writeState(
-          state.copyWith(
-            walkieInviteSessionId: control.sessionId,
-            walkieInvitePeerNodeId: peerNodeId,
-            walkieInviteIsIncoming: true,
-            walkiePeerNodeId: peerNodeId,
-            clearWalkieLastError: true,
+        _updateWalkie(
+          (w) => w.copyWith(
+            inviteSessionId: control.sessionId,
+            invitePeerNodeId: peerNodeId,
+            inviteIsIncoming: true,
+            peerNodeId: peerNodeId,
+            clearLastError: true,
           ),
         );
         if (_isTrustedNode(peerNodeId) && _isWalkieAlwaysOn(peerNodeId)) {
@@ -266,47 +269,47 @@ class WalkieSessionController {
         }
         return;
       case _walkieControlActionAccept:
-        if (state.walkieInviteSessionId != control.sessionId &&
-            state.walkieSessionActivePeerNodeId != peerNodeId) {
+        if (state.walkie.inviteSessionId != control.sessionId &&
+            state.walkie.sessionActivePeerNodeId != peerNodeId) {
           return;
         }
-        _writeState(
-          state.copyWith(
-            walkieSessionActivePeerNodeId: peerNodeId,
-            walkiePeerNodeId: peerNodeId,
-            clearWalkieInvite: true,
-            clearWalkieLastError: true,
+        _updateWalkie(
+          (w) => w.copyWith(
+            sessionActivePeerNodeId: peerNodeId,
+            peerNodeId: peerNodeId,
+            clearInvite: true,
+            clearLastError: true,
           ),
         );
         return;
       case _walkieControlActionDecline:
       case _walkieControlActionCancel:
-        if (state.walkieInviteSessionId != control.sessionId &&
-            state.walkieSessionActivePeerNodeId != peerNodeId) {
+        if (state.walkie.inviteSessionId != control.sessionId &&
+            state.walkie.sessionActivePeerNodeId != peerNodeId) {
           return;
         }
-        _writeState(
-          state.copyWith(
-            clearWalkieInvite: true,
-            clearWalkieSessionActivePeerNodeId: true,
-            walkieIsTransmitting: false,
-            walkieIsSending: false,
-            clearWalkieLastError: true,
+        _updateWalkie(
+          (w) => w.copyWith(
+            clearInvite: true,
+            clearSessionActivePeerNodeId: true,
+            isTransmitting: false,
+            isSending: false,
+            clearLastError: true,
           ),
         );
         return;
       case _walkieControlActionEnd:
-        if (state.walkieInviteSessionId != control.sessionId &&
-            state.walkieSessionActivePeerNodeId != peerNodeId) {
+        if (state.walkie.inviteSessionId != control.sessionId &&
+            state.walkie.sessionActivePeerNodeId != peerNodeId) {
           return;
         }
-        _writeState(
-          state.copyWith(
-            clearWalkieInvite: true,
-            clearWalkieSessionActivePeerNodeId: true,
-            walkieIsTransmitting: false,
-            walkieIsSending: false,
-            walkieLastError:
+        _updateWalkie(
+          (w) => w.copyWith(
+            clearInvite: true,
+            clearSessionActivePeerNodeId: true,
+            isTransmitting: false,
+            isSending: false,
+            lastError:
                 '${msg.peerName ?? msg.senderName} ended the walkie session',
           ),
         );

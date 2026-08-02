@@ -258,7 +258,9 @@ class ChatController extends Notifier<ChatState> {
     final publicWalkieStore = _publicWalkieStore;
     final enabled = await publicWalkieStore.getStayOnlineEnabled();
     if (_isDisposed) return;
-    state = state.copyWith(publicWalkieStayOnline: enabled);
+    state = state.copyWith(
+      walkie: state.walkie.copyWith(publicStayOnline: enabled),
+    );
   }
 
   Future<void> _loadChatListPreferences() async {
@@ -275,12 +277,14 @@ class ChatController extends Notifier<ChatState> {
   }
 
   Future<void> _handleWalkiePlaybackMessage(AirGridMessage message) async {
-    state = state.copyWith(clearWalkieLastError: true);
+    state = state.copyWith(walkie: state.walkie.copyWith(clearLastError: true));
 
     final path = message.mediaTempPath;
     if (path == null || path.isEmpty) {
       state = state.copyWith(
-        walkieLastError: 'Incoming public walkie audio unavailable',
+        walkie: state.walkie.copyWith(
+          lastError: 'Incoming public walkie audio unavailable',
+        ),
       );
       await discardWalkieMessage(message.id, deleteTempFile: false);
       return;
@@ -294,7 +298,9 @@ class ChatController extends Notifier<ChatState> {
       await discardWalkieMessage(message.id);
     } catch (_) {
       state = state.copyWith(
-        walkieLastError: 'Failed to play incoming public walkie',
+        walkie: state.walkie.copyWith(
+          lastError: 'Failed to play incoming public walkie',
+        ),
       );
       await discardWalkieMessage(message.id);
     }
@@ -308,8 +314,8 @@ class ChatController extends Notifier<ChatState> {
     if (!_contactStore.isWalkieAlwaysOn(message.senderNodeId)) {
       return false;
     }
-    final activePeerId = state.walkieSessionActivePeerNodeId;
-    final invitePeerId = state.walkieInvitePeerNodeId;
+    final activePeerId = state.walkie.sessionActivePeerNodeId;
+    final invitePeerId = state.walkie.invitePeerNodeId;
     return activePeerId == message.senderNodeId ||
         invitePeerId == message.senderNodeId;
   }
@@ -459,7 +465,7 @@ class ChatController extends Notifier<ChatState> {
             messageToSave.messageKind == 'audio' &&
             messageToSave.content == '[walkie]' &&
             !messageToSave.isLocal &&
-            state.publicWalkieStayOnline;
+            state.walkie.publicStayOnline;
         final shouldPlayPrivateWalkie =
             messageToSave.conversationType == 'private' &&
             messageToSave.messageKind == 'audio' &&
@@ -575,8 +581,8 @@ class ChatController extends Notifier<ChatState> {
         final peerLocations = Map<String, PeerLocation>.from(
           state.peerLocations,
         )..removeWhere((nodeId, _) => !activeNodeIds.contains(nodeId));
-        final activeWalkiePeerId = state.walkieSessionActivePeerNodeId;
-        final inviteWalkiePeerId = state.walkieInvitePeerNodeId;
+        final activeWalkiePeerId = state.walkie.sessionActivePeerNodeId;
+        final inviteWalkiePeerId = state.walkie.invitePeerNodeId;
         final activeWalkiePeerDisconnected =
             activeWalkiePeerId != null &&
             !activeNodeIds.contains(activeWalkiePeerId);
@@ -589,18 +595,20 @@ class ChatController extends Notifier<ChatState> {
           peerLocations: peerLocations,
           lastEvent: '${visiblePeers.length} peer(s) connected',
           selectedConversation: selectedConversation,
-          clearWalkieSessionActivePeerNodeId: activeWalkiePeerDisconnected,
-          clearWalkieInvite:
-              activeWalkiePeerDisconnected || inviteWalkiePeerDisconnected,
-          walkieIsTransmitting: activeWalkiePeerDisconnected
-              ? false
-              : state.walkieIsTransmitting,
-          walkieIsSending: activeWalkiePeerDisconnected
-              ? false
-              : state.walkieIsSending,
-          walkieLastError: activeWalkiePeerDisconnected
-              ? 'Private walkie peer disconnected'
-              : state.walkieLastError,
+          walkie: state.walkie.copyWith(
+            clearSessionActivePeerNodeId: activeWalkiePeerDisconnected,
+            clearInvite:
+                activeWalkiePeerDisconnected || inviteWalkiePeerDisconnected,
+            isTransmitting: activeWalkiePeerDisconnected
+                ? false
+                : state.walkie.isTransmitting,
+            isSending: activeWalkiePeerDisconnected
+                ? false
+                : state.walkie.isSending,
+            lastError: activeWalkiePeerDisconnected
+                ? 'Private walkie peer disconnected'
+                : state.walkie.lastError,
+          ),
         );
         final localLocation = state.localLocation;
         if (hasNewPeers &&
@@ -805,9 +813,11 @@ class ChatController extends Notifier<ChatState> {
       isDiscovering: false,
       peers: [],
       isLocationSharing: false,
-      walkieIsTransmitting: false,
-      walkieIsSending: false,
-      clearWalkieLastError: true,
+      walkie: state.walkie.copyWith(
+        isTransmitting: false,
+        isSending: false,
+        clearLastError: true,
+      ),
       clearLocalLocation: true,
       clearLocationStatus: true,
       lastEvent: 'Mesh stopped',
@@ -1318,7 +1328,7 @@ class ChatController extends Notifier<ChatState> {
       state = state.copyWith(
         messages: messages,
         selectedConversation: target,
-        walkiePeerNodeId: target.peerNodeId,
+        walkie: state.walkie.copyWith(peerNodeId: target.peerNodeId),
         unreadPrivateCounts: unread,
       );
       unawaited(_repo.markPrivateThreadRead(target.peerNodeId));
@@ -1327,14 +1337,16 @@ class ChatController extends Notifier<ChatState> {
     }
     state = state.copyWith(
       selectedConversation: target,
-      clearWalkiePeerNodeId: true,
+      walkie: state.walkie.copyWith(clearPeerNodeId: true),
     );
   }
 
   void setWalkiePeerNodeId(String? nodeId) {
     state = state.copyWith(
-      walkiePeerNodeId: nodeId,
-      clearWalkiePeerNodeId: nodeId == null,
+      walkie: state.walkie.copyWith(
+        peerNodeId: nodeId,
+        clearPeerNodeId: nodeId == null,
+      ),
     );
   }
 
@@ -1343,19 +1355,23 @@ class ChatController extends Notifier<ChatState> {
     String? peerNodeId,
   }) {
     state = state.copyWith(
-      walkieIsTransmitting: isTransmitting,
-      walkiePeerNodeId: peerNodeId,
+      walkie: state.walkie.copyWith(
+        isTransmitting: isTransmitting,
+        peerNodeId: peerNodeId,
+      ),
     );
   }
 
   void setWalkieSending({required bool isSending}) {
-    state = state.copyWith(walkieIsSending: isSending);
+    state = state.copyWith(walkie: state.walkie.copyWith(isSending: isSending));
   }
 
   void setWalkieLastError(String? error) {
     state = state.copyWith(
-      walkieLastError: error,
-      clearWalkieLastError: error == null,
+      walkie: state.walkie.copyWith(
+        lastError: error,
+        clearLastError: error == null,
+      ),
     );
   }
 
@@ -1581,7 +1597,9 @@ class ChatController extends Notifier<ChatState> {
 
   Future<void> setPublicWalkieStayOnline(bool enabled) async {
     await _publicWalkieStore.setStayOnlineEnabled(enabled);
-    state = state.copyWith(publicWalkieStayOnline: enabled);
+    state = state.copyWith(
+      walkie: state.walkie.copyWith(publicStayOnline: enabled),
+    );
     await publishWalkieAvailability(enabled);
   }
 

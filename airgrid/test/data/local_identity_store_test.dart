@@ -118,18 +118,21 @@ void main() {
       expect(store.privateKeyBase64, equals(validPrivateKey));
     });
 
-    test('legacy keys are removed from SharedPreferences after migration', () async {
-      SharedPreferences.setMockInitialValues({
-        'airgrid_private_key_b64': validPrivateKey,
-        'airgrid_public_key_b64': validPublicKey,
-      });
+    test(
+      'legacy keys are removed from SharedPreferences after migration',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'airgrid_private_key_b64': validPrivateKey,
+          'airgrid_public_key_b64': validPublicKey,
+        });
 
-      await LocalIdentityStore.create();
+        await LocalIdentityStore.create();
 
-      final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('airgrid_private_key_b64'), isNull);
-      expect(prefs.getString('airgrid_public_key_b64'), isNull);
-    });
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString('airgrid_private_key_b64'), isNull);
+        expect(prefs.getString('airgrid_public_key_b64'), isNull);
+      },
+    );
 
     test('migration only happens once', () async {
       SharedPreferences.setMockInitialValues({
@@ -219,7 +222,7 @@ void main() {
       final privateKey = store.privateKeyBase64;
 
       final prefs = await SharedPreferences.getInstance();
-      
+
       // Keys should NOT be in SharedPreferences
       expect(prefs.getString('airgrid_private_key_b64'), isNull);
       expect(prefs.getString('airgrid_public_key_b64'), isNull);

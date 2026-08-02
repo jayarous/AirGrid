@@ -96,7 +96,7 @@ _makeReceiptCrypto(LocalIdentityStore identity, {String? remoteNodeId}) async {
 void main() {
   // Setup mock secure storage for testing
   FlutterSecureStorage.setMockInitialValues({});
-  
+
   late FakeTransport transport;
   late LocalIdentityStore identity;
   late AirGridMeshService mesh;
@@ -502,7 +502,16 @@ void main() {
         expect(transport.sentPayloads, isNotEmpty);
 
         final sent = transport.sentPayloads.last;
-        expect(sent.endpoints, containsAll(['ep-target', 'ep-other']));
+        // Encrypted private packets are broadcast to every connected endpoint
+        // for crowd relay — relays cannot read the content, and the extra
+        // paths raise the odds of delivery. Plaintext private packets are
+        // sent only to the target; that is covered by the sibling test
+        // 'sends only to target endpoint, not all peers'.
+        //
+        // NOTE: recipientNodeId travels in cleartext, so this broadcast
+        // exposes who is talking to whom to every peer in range, not just
+        // those on the relay path. Tracked as the metadata-minimisation item.
+        expect(sent.endpoints, containsAll(<String>['ep-target', 'ep-other']));
 
         final packet = TransportCodec.decode(sent.bytes)!;
         expect(packet.conversationType, 'private');
@@ -1654,12 +1663,14 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       // Upsert alice first so block() takes effect.
-      await contactStore.upsert(KnownContact(
-        nodeId: _aliceNodeId,
-        displayName: 'Alice',
-        publicKeyBase64: testKey,
-        lastSeenAt: DateTime(2024),
-      ));
+      await contactStore.upsert(
+        KnownContact(
+          nodeId: _aliceNodeId,
+          displayName: 'Alice',
+          publicKeyBase64: testKey,
+          lastSeenAt: DateTime(2024),
+        ),
+      );
       await contactStore.block(_aliceNodeId);
 
       final before = bTransport.sentPayloads.length;
@@ -1674,32 +1685,37 @@ void main() {
       );
     });
 
-    test('blocked key_announce is dropped and does not clear isBlocked', () async {
-      // Pre-seed alice as blocked so the gate can fire on her key_announce.
-      await contactStore.upsert(KnownContact(
-        nodeId: _aliceNodeId,
-        displayName: 'Alice',
-        publicKeyBase64: testKey,
-        lastSeenAt: DateTime(2024),
-      ));
-      await contactStore.block(_aliceNodeId);
+    test(
+      'blocked key_announce is dropped and does not clear isBlocked',
+      () async {
+        // Pre-seed alice as blocked so the gate can fire on her key_announce.
+        await contactStore.upsert(
+          KnownContact(
+            nodeId: _aliceNodeId,
+            displayName: 'Alice',
+            publicKeyBase64: testKey,
+            lastSeenAt: DateTime(2024),
+          ),
+        );
+        await contactStore.block(_aliceNodeId);
 
-      bTransport.connectPeer('ep-blocked');
-      await Future<void>.delayed(Duration.zero);
+        bTransport.connectPeer('ep-blocked');
+        await Future<void>.delayed(Duration.zero);
 
-      bTransport.receiveBytes(
-        'ep-blocked',
-        TransportCodec.encode(keyAnnounce(_aliceNodeId, 'Alice')),
-      );
-      await Future<void>.delayed(Duration.zero);
+        bTransport.receiveBytes(
+          'ep-blocked',
+          TransportCodec.encode(keyAnnounce(_aliceNodeId, 'Alice')),
+        );
+        await Future<void>.delayed(Duration.zero);
 
-      // The block gate dropped the key_announce — alice remains blocked.
-      expect(
-        contactStore.isBlocked(_aliceNodeId),
-        isTrue,
-        reason: 'blocked key_announce must not clear isBlocked',
-      );
-    });
+        // The block gate dropped the key_announce — alice remains blocked.
+        expect(
+          contactStore.isBlocked(_aliceNodeId),
+          isTrue,
+          reason: 'blocked key_announce must not clear isBlocked',
+        );
+      },
+    );
 
     test('sendPrivateMessage to blocked peer returns blockedContact', () async {
       bTransport.connectPeer('ep-blocked');
@@ -1712,9 +1728,7 @@ void main() {
       );
       await Future<void>.delayed(Duration.zero);
 
-      final peer = bMesh.peers.firstWhere(
-        (p) => p.nodeId == _aliceNodeId,
-      );
+      final peer = bMesh.peers.firstWhere((p) => p.nodeId == _aliceNodeId);
 
       await contactStore.block(_aliceNodeId);
 

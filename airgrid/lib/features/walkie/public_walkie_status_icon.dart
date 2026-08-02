@@ -11,7 +11,7 @@ class PublicWalkieStatusIcon extends ConsumerWidget {
     final active = ref.watch(
       chatControllerProvider.select(
         (state) =>
-            state.publicWalkieStayOnline ||
+            state.walkie.publicStayOnline ||
             state.knownContacts.any(
               (contact) => contact.isTrusted && contact.walkieAlwaysOn,
             ),

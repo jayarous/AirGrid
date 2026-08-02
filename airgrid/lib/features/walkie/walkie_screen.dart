@@ -94,7 +94,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       final selected = state.selectedConversation;
       final targetNodeId = selected is PrivateConversation
           ? selected.peerNodeId
-          : state.walkiePeerNodeId;
+          : state.walkie.peerNodeId;
       final keepAvailable =
           !_isPublicMode &&
           _isAlwaysOnTrusted(state.knownContacts, targetNodeId);
@@ -156,7 +156,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     _statusClearTimer = Timer(const Duration(seconds: 4), () {
       if (!mounted) return;
       final state = ref.read(chatControllerProvider);
-      if (state.walkieIsTransmitting || state.walkieIsSending) {
+      if (state.walkie.isTransmitting || state.walkie.isSending) {
         _scheduleStatusClear();
         return;
       }
@@ -172,7 +172,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     if (selected is PrivateConversation) {
       return selected.peerNodeId;
     }
-    return state.walkiePeerNodeId;
+    return state.walkie.peerNodeId;
   }
 
   Future<void> _handleIncomingWalkieUpdates(
@@ -183,7 +183,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
     final state = ref.read(chatControllerProvider);
     final selected = state.selectedConversation;
-    if ((_isPublicMode && state.publicWalkieStayOnline) ||
+    if ((_isPublicMode && state.walkie.publicStayOnline) ||
         (!_isPublicMode &&
             selected is PrivateConversation &&
             _isAlwaysOnTrusted(state.knownContacts, selected.peerNodeId))) {
@@ -214,7 +214,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       // Drop incoming audio if no active session with this peer.
       final activeSessionNodeId = ref
           .read(chatControllerProvider)
-          .walkieSessionActivePeerNodeId;
+          .walkie
+          .sessionActivePeerNodeId;
       if (activeSessionNodeId != targetNodeId) return;
 
       for (final message in next) {
@@ -287,7 +288,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   /// Resolves the current private walkie target without mutating state.
   ///
   /// Returns the selected [PrivateConversation], or reconstructs one from the
-  /// rider/latched [ChatState.walkiePeerNodeId] if a peer for it is online.
+  /// rider/latched [WalkieState.peerNodeId] if a peer for it is online.
   /// Returns null when no target is chosen — callers surface a "choose a peer"
   /// prompt rather than silently latching onto an arbitrary online peer.
   PrivateConversation? _currentTarget() {
@@ -297,7 +298,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       return selected;
     }
 
-    final peer = _peerByNodeId(state.walkiePeerNodeId);
+    final peer = _peerByNodeId(state.walkie.peerNodeId);
     if (peer == null || peer.nodeId == null) {
       return null;
     }
@@ -397,8 +398,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     if (!_isAlwaysOnTrusted(state.knownContacts, target.peerNodeId)) {
       return;
     }
-    if (state.walkieInvitePeerNodeId == target.peerNodeId ||
-        state.walkieSessionActivePeerNodeId == target.peerNodeId) {
+    if (state.walkie.invitePeerNodeId == target.peerNodeId ||
+        state.walkie.sessionActivePeerNodeId == target.peerNodeId) {
       return;
     }
 
@@ -534,7 +535,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: candidates.length,
-                  separatorBuilder: (_, __) => const Divider(
+                  separatorBuilder: (_, _) => const Divider(
                     color: Colors.white10,
                     height: 0,
                     indent: 72,
@@ -625,7 +626,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   Future<void> _startHoldRecording() async {
     _triggerButtonFeedback();
     final current = ref.read(chatControllerProvider);
-    if (current.walkieIsTransmitting || current.walkieIsSending) {
+    if (current.walkie.isTransmitting || current.walkie.isSending) {
       _setStatus('Walkie is already busy');
       return;
     }
@@ -646,7 +647,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         return;
       }
 
-      if (current.walkieSessionActivePeerNodeId != target.peerNodeId) {
+      if (current.walkie.sessionActivePeerNodeId != target.peerNodeId) {
         // No active session yet. For trusted always-on contacts, transparently
         // re-invite so pressing PTT reconnects instead of dead-ending on an
         // error. For everyone else, ask the user to invite and wait for accept.
@@ -655,7 +656,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           target.peerNodeId,
         );
         if (canAutoInvite) {
-          if (current.walkieInvitePeerNodeId != target.peerNodeId) {
+          if (current.walkie.invitePeerNodeId != target.peerNodeId) {
             final peer = _peerByNodeId(target.peerNodeId);
             if (peer != null) {
               unawaited(_invitePeer(peer));
@@ -737,7 +738,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       _status = 'Transmitting... release to send';
     });
     _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      if (!mounted || !ref.read(chatControllerProvider).walkieIsTransmitting) {
+      if (!mounted || !ref.read(chatControllerProvider).walkie.isTransmitting) {
         return;
       }
       setState(() {
@@ -761,7 +762,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   }
 
   Future<void> _cancelHoldRecording() async {
-    if (!ref.read(chatControllerProvider).walkieIsTransmitting) return;
+    if (!ref.read(chatControllerProvider).walkie.isTransmitting) return;
     _ticker?.cancel();
     _ticker = null;
     _holdStopwatch
@@ -789,7 +790,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
   Future<void> _stopHoldAndSend() async {
     final current = ref.read(chatControllerProvider);
-    if (!current.walkieIsTransmitting || current.walkieIsSending) return;
+    if (!current.walkie.isTransmitting || current.walkie.isSending) return;
 
     _ticker?.cancel();
     _ticker = null;
@@ -991,6 +992,11 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
         // Delete the recorded file since we're not sending it now.
         await _deleteRecordedFile(recordedPath);
+
+        // The delete is awaited, so the screen may be gone by now; the branch
+        // below only navigates, which is exactly what a disposed screen must
+        // not do.
+        if (!mounted) return;
 
         if (choice == true) {
           // Select the private conversation and open chat.
@@ -2116,7 +2122,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
   @override
   Widget build(BuildContext context) {
     ref.listen<String?>(
-      chatControllerProvider.select((state) => state.walkieLastError),
+      chatControllerProvider.select((state) => state.walkie.lastError),
       (previous, next) {
         if (!mounted || next == null || next.isEmpty || next == previous) {
           return;
@@ -2140,12 +2146,12 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
     final state = ref.watch(chatControllerProvider);
     final riderState = ref.watch(riderModeControllerProvider);
-    final isHolding = state.walkieIsTransmitting;
-    final isSending = state.walkieIsSending;
+    final isHolding = state.walkie.isTransmitting;
+    final isSending = state.walkie.isSending;
     final selected = state.selectedConversation;
     final targetNodeId = selected is PrivateConversation
         ? selected.peerNodeId
-        : state.walkiePeerNodeId;
+        : state.walkie.peerNodeId;
     final hasTarget = targetNodeId != null && targetNodeId.isNotEmpty;
     final targetPeer = hasTarget ? _peerByNodeId(targetNodeId) : null;
     final targetName = selected is PrivateConversation
@@ -2153,18 +2159,18 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         : targetPeer?.displayName ?? 'Private target';
     final isTargetOnline =
         hasTarget && state.peers.any((p) => p.nodeId == targetNodeId);
-    final isIncomingInvite = state.walkieInviteIsIncoming;
+    final isIncomingInvite = state.walkie.inviteIsIncoming;
     final isActiveSessionForTarget = _isRiderMode
         ? false
         : _isPublicMode
         ? state.meshStarted
-        : hasTarget && state.walkieSessionActivePeerNodeId == targetNodeId;
+        : hasTarget && state.walkie.sessionActivePeerNodeId == targetNodeId;
     final isOutgoingInviteForTarget =
         !_isPublicMode &&
         !_isRiderMode &&
         !isIncomingInvite &&
         hasTarget &&
-        state.walkieInvitePeerNodeId == targetNodeId &&
+        state.walkie.invitePeerNodeId == targetNodeId &&
         !isActiveSessionForTarget;
     final selectedPrivateContact = !_isPublicMode && hasTarget
         ? state.knownContacts.cast<KnownContact?>().firstWhere(
@@ -2175,7 +2181,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     final privateStayOnlineEligible =
         selectedPrivateContact != null && selectedPrivateContact.isTrusted;
     final stayOnlineOn = _isPublicMode
-        ? state.publicWalkieStayOnline
+        ? state.walkie.publicStayOnline
         : (selectedPrivateContact?.walkieAlwaysOn ?? false);
     final stayOnlineEnabled =
         !_isRiderMode &&
@@ -2394,7 +2400,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                         .publishWalkieAvailability(
                                           ref
                                               .read(chatControllerProvider)
-                                              .publicWalkieStayOnline,
+                                              .walkie
+                                              .publicStayOnline,
                                         ),
                                   );
                                 },

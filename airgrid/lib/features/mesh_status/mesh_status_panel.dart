@@ -101,24 +101,24 @@ class MeshStatusPanel extends ConsumerWidget {
             if (isDiscovering)
               Text(
                 'Looking for nearby AirGrid users',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),
             if (isAdvertising)
               Text(
                 'Others AirGrid users nearby can find you',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),
           ] else if (!controlsEnabled) ...[
             const SizedBox(height: 8),
             Text(
               'Mesh controls are unavailable right now',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: cs.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
           ],
           if (peers.isNotEmpty) ...[
