@@ -3,6 +3,23 @@ import 'dart:typed_data';
 
 enum RiderControlAction { invite, accept, decline, end, mute, unmute }
 
+/// Why an active Rider Mode session stopped.
+///
+/// Rider Mode has no screen the rider can safely look at, so the reason drives
+/// an audible cue rather than a visual one.
+enum RiderSessionEndReason {
+  /// This device hung up.
+  endedLocally,
+
+  /// The peer sent an explicit [RiderControlAction.end].
+  endedByPeer,
+
+  /// The peer stopped answering: out of range, app killed, or battery dead.
+  /// Nothing arrives on the wire in this case, so it is inferred by the
+  /// keepalive watchdog or a transport disconnect.
+  peerLost,
+}
+
 class RiderControlPayload {
   final RiderControlAction action;
   final String sessionId;
@@ -31,15 +48,50 @@ class RiderControlPayload {
       if (actionRaw == null || sessionId == null || sessionId.isEmpty) {
         return null;
       }
-      final action = RiderControlAction.values.firstWhere(
-        (v) => v.name == actionRaw,
-        orElse: () => RiderControlAction.invite,
-      );
+      // An unknown action must be dropped, never coerced. Coercing to `invite`
+      // would let any future action pop an invite prompt on an older build.
+      final action = RiderControlAction.values
+          .cast<RiderControlAction?>()
+          .firstWhere((v) => v!.name == actionRaw, orElse: () => null);
+      if (action == null) return null;
       return RiderControlPayload(
         action: action,
         sessionId: sessionId,
         autoJoin: decoded['autoJoin'] as bool? ?? false,
       );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+/// Liveness ping for an active session.
+///
+/// In voice-activated mic mode no audio frames are sent while the rider is
+/// quiet, so silence cannot be read as absence. This is sent on a fixed
+/// interval regardless of mic mode to give the far end something to time out
+/// against.
+///
+/// It rides inside a `rider_control` packet so routing needs no new packet
+/// type, but carries a distinct wire `kind`: builds that predate this payload
+/// parse it with [RiderControlPayload.fromWire], get null back because the kind
+/// does not match, and drop it harmlessly.
+class RiderKeepalivePayload {
+  final String sessionId;
+
+  const RiderKeepalivePayload({required this.sessionId});
+
+  String toWire() =>
+      jsonEncode({'kind': 'rider_keepalive', 'sessionId': sessionId});
+
+  static RiderKeepalivePayload? fromWire(String wire) {
+    try {
+      final decoded = jsonDecode(wire);
+      if (decoded is! Map<String, dynamic>) return null;
+      if (decoded['kind'] != 'rider_keepalive') return null;
+      final sessionId = decoded['sessionId'] as String?;
+      if (sessionId == null || sessionId.isEmpty) return null;
+      return RiderKeepalivePayload(sessionId: sessionId);
     } catch (_) {
       return null;
     }
@@ -125,5 +177,15 @@ class RiderAudioFrameEvent extends RiderModeEvent {
     required super.peerNodeId,
     required super.peerName,
     required this.frame,
+  });
+}
+
+class RiderKeepaliveEvent extends RiderModeEvent {
+  final RiderKeepalivePayload keepalive;
+
+  const RiderKeepaliveEvent({
+    required super.peerNodeId,
+    required super.peerName,
+    required this.keepalive,
   });
 }

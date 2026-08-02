@@ -615,6 +615,56 @@ class AirGridMeshService {
     }
   }
 
+  /// Sends a session liveness ping.
+  ///
+  /// Deliberately reuses the `rider_control` packet type so the existing relay,
+  /// dedupe and trust gates apply unchanged; the payload's own wire `kind`
+  /// distinguishes it, and builds that predate keepalives drop it on decode.
+  Future<bool> sendRiderKeepalive({
+    required MeshPeer peer,
+    required String sessionId,
+  }) async {
+    final recipientNodeId = peer.nodeId;
+    if (recipientNodeId == null) return false;
+    if (_contactStore.isBlocked(recipientNodeId) ||
+        !_contactStore.isTrusted(recipientNodeId) ||
+        !_cryptoService.hasKey(recipientNodeId) ||
+        !_transport.connectedEndpoints.contains(peer.endpointId)) {
+      return false;
+    }
+
+    final encrypted = await _cryptoService.encryptContent(
+      RiderKeepalivePayload(sessionId: sessionId).toWire(),
+      recipientNodeId,
+    );
+    if (encrypted == null) return false;
+
+    final localNodeId = _identity.nodeId;
+    final packet = AirGridPacket(
+      messageId: const Uuid().v4(),
+      senderNodeId: localNodeId,
+      senderName: _identity.displayName ?? 'Unknown',
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      content: encrypted,
+      seenByNodes: [localNodeId],
+      hopLimit: 1,
+      packetType: 'rider_control',
+      senderPublicKey: _identity.publicKeyBase64,
+      encryptionVersion: 1,
+      conversationType: 'private',
+      recipientNodeId: recipientNodeId,
+    );
+
+    try {
+      await _transport.sendToEndpoints([
+        peer.endpointId,
+      ], TransportCodec.encode(packet));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> sendRiderAudioFrame({
     required MeshPeer peer,
     required RiderAudioFramePayload frame,
@@ -1981,12 +2031,24 @@ class AirGridMeshService {
 
     if (packet.packetType == 'rider_control') {
       final control = RiderControlPayload.fromWire(plaintext);
-      if (control == null) return;
+      if (control != null) {
+        _riderController.add(
+          RiderControlEvent(
+            peerNodeId: packet.senderNodeId,
+            peerName: packet.senderName,
+            control: control,
+          ),
+        );
+        return;
+      }
+      // Keepalives share the packet type; they are told apart by wire kind.
+      final keepalive = RiderKeepalivePayload.fromWire(plaintext);
+      if (keepalive == null) return;
       _riderController.add(
-        RiderControlEvent(
+        RiderKeepaliveEvent(
           peerNodeId: packet.senderNodeId,
           peerName: packet.senderName,
-          control: control,
+          keepalive: keepalive,
         ),
       );
       return;
