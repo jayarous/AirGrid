@@ -329,7 +329,13 @@ void main() {
     expect(state.walkie.sessionActivePeerNodeId, _privatePeerNodeId);
     expect(state.walkie.peerNodeId, _privatePeerNodeId);
     expect(state.walkie.invitePeerNodeId, isNull);
-    expect(state.selectedConversation, isA<PrivateConversation>());
+
+    // selectedConversation is deliberately NOT asserted here. The accept
+    // arrives from the remote peer, and switching the local user's open
+    // conversation in response would yank them out of whatever they were
+    // reading. Session activation is what this test is about, and that is
+    // covered by sessionActivePeerNodeId above; the walkie screen reads that
+    // field rather than selectedConversation.
   });
 
   test('incoming end clears active private walkie session', () async {

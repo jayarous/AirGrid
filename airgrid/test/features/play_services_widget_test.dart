@@ -233,10 +233,12 @@ void main() {
     );
 
     expect(find.text('AirGrid battery saver'), findsOneWidget);
-    expect(
-      find.textContaining('stops scanning and sharing location'),
-      findsOneWidget,
-    );
+    // Battery saver defaults OFF (ChatState.batteryOptimizationEnabled, set to
+    // false by RiderModeReady -- rider mode needs continuous background mesh
+    // activity). So the "Off:" note is what renders first, and toggling swaps
+    // it to the "On:" note. This assertion pair is the point of the test: the
+    // subtitle has to track the switch.
+    expect(find.textContaining('may continue scanning'), findsOneWidget);
     expect(find.text('Mesh status'), findsOneWidget);
     expect(find.widgetWithText(SwitchListTile, 'Available'), findsOneWidget);
     expect(find.text('Scanning'), findsOneWidget);
@@ -251,7 +253,10 @@ void main() {
     await tester.tap(batterySaverSwitch);
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('may continue scanning'), findsOneWidget);
+    expect(
+      find.textContaining('stops scanning and sharing location'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('Settings opens Terms & Safety screen', (tester) async {

@@ -1232,9 +1232,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     return Scaffold(
       appBar: AppBar(
         title: const Text('AirGrid'),
+        // Seven actions do not fit a 320dp-wide bar at the default 48dp tap
+        // footprint -- they overran it by 14px. AppBar actions have no overflow
+        // behaviour of their own, and the width cannot be read from MediaQuery
+        // here (it reports the screen, not the bar), so the footprint is
+        // tightened for every size rather than branched on a width we cannot
+        // trust. Compact density keeps the tap targets within guidelines.
+        actionsIconTheme: const IconThemeData(size: 22),
         actions: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 2),
             child: Center(
               child: _PeerBadge(count: peerCount, meshOn: meshStarted),
             ),
@@ -1244,6 +1251,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             builder: (context, ref, _) {
               final helpMode = ref.watch(helpModeProvider);
               return IconButton(
+                visualDensity: VisualDensity.compact,
                 icon: Icon(helpMode ? Icons.help : Icons.help_outline),
                 tooltip: helpMode ? 'Exit help mode' : 'Help',
                 onPressed: () =>
@@ -1252,6 +1260,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             },
           ),
           IconButton(
+            visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
             onPressed: () async {
@@ -1451,12 +1460,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             },
           ),
           IconButton(
+            visualDensity: VisualDensity.compact,
             icon: Icon(_showStatus ? Icons.info : Icons.info_outline),
             tooltip: 'Mesh status',
             onPressed: () => setState(() => _showStatus = !_showStatus),
           ),
           if (meshStarted)
             IconButton(
+              visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.wifi),
               tooltip: 'Stop mesh',
               onPressed: () =>
@@ -1464,6 +1475,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             )
           else
             IconButton(
+              visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.wifi_off),
               tooltip: 'Start mesh',
               onPressed: () =>
@@ -1473,10 +1485,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final compactHeight = media.size.height < 540;
+          // Branch on the height this Column actually gets, not on the screen
+          // height. The two disagree whenever something above us takes space --
+          // the app bar, a split-screen host, an embedded view -- and when they
+          // disagree the compact layout is skipped on a body that needs it and
+          // the Column overflows. 484 is the old 540 screen threshold minus a
+          // standard app bar.
+          final compactHeight = constraints.maxHeight < 484;
+          // Ceiling only, no floor. A lower clamp bound here used to win on
+          // short windows -- it reserved 110px of a ~264px body for the status
+          // panel and pushed the message list and input bar out of the Column.
+          // The panel is scrollable, so a small one degrades gracefully; an
+          // overflowing layout does not.
           final meshStatusMaxHeight = media.viewInsets.bottom > 0
-              ? (constraints.maxHeight * 0.22).clamp(90.0, 160.0)
-              : (constraints.maxHeight * 0.30).clamp(110.0, 220.0);
+              ? (constraints.maxHeight * 0.22).clamp(0.0, 160.0)
+              : (constraints.maxHeight * 0.30).clamp(0.0, 220.0);
 
           return Column(
             children: [
@@ -1511,10 +1534,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               if (isMeshStarting) const _ConnectingBanner(),
               if (_showStatus)
                 compactHeight
-                    ? SizedBox(
-                        height: meshStatusMaxHeight,
-                        child: SingleChildScrollView(
-                          child: const MeshStatusPanel(),
+                    // Flexible, not SizedBox: the panel must give way when the
+                    // message list and input bar need the room, rather than
+                    // holding a fixed height and overflowing the Column.
+                    ? Flexible(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: meshStatusMaxHeight,
+                          ),
+                          child: SingleChildScrollView(
+                            child: const MeshStatusPanel(),
+                          ),
                         ),
                       )
                     : const MeshStatusPanel(),
