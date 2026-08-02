@@ -1491,7 +1491,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           // disagree the compact layout is skipped on a body that needs it and
           // the Column overflows. 484 is the old 540 screen threshold minus a
           // standard app bar.
-          final compactHeight = constraints.maxHeight < 484;
+          //
+          // The keyboard inset is added back deliberately. resizeToAvoidBottom-
+          // Inset shrinks the body while the keyboard is up, so using the raw
+          // constraint here made this flip to compact the moment the user
+          // focused the input -- which drops the conversation picker out of the
+          // Column, re-parents the input bar into a different slot, rebuilds the
+          // TextField, and dismisses the keyboard it was reacting to. It then
+          // flipped straight back and oscillated. Layout mode must depend on
+          // how much room the screen has, not on whether a keyboard is showing.
+          final heightIgnoringKeyboard =
+              constraints.maxHeight + media.viewInsets.bottom;
+          final compactHeight = heightIgnoringKeyboard < 484;
           // Ceiling only, no floor. A lower clamp bound here used to win on
           // short windows -- it reserved 110px of a ~264px body for the status
           // panel and pushed the message list and input bar out of the Column.
@@ -1553,6 +1564,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               ),
               if (!compactHeight)
                 HelpTarget(
+                  key: const ValueKey('chat-conversation-picker'),
                   title: 'Conversation Selector',
                   description:
                       'Switch between Public Chat (broadcast to all nearby) '
@@ -1560,7 +1572,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                       'Private chats are indicated by a lock icon.',
                   child: const _ConversationPicker(),
                 ),
+              // Keyed so it keeps its element when a sibling above it appears or
+              // disappears. Without a key, Column matches children by index and
+              // type, so dropping the picker re-parents this into the previous
+              // slot, rebuilds the TextField, and silently drops keyboard focus.
               HelpTarget(
+                key: const ValueKey('chat-input-bar'),
                 title: 'Chat Input',
                 description:
                     'Type a message and tap Send. '

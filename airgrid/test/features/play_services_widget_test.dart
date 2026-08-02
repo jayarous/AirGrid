@@ -478,6 +478,54 @@ void main() {
     },
   );
 
+  // Regression: typing a message dismissed the keyboard the instant it opened.
+  //
+  // The body shrinks while the keyboard is up (resizeToAvoidBottomInset), so a
+  // compact-layout check reading the raw constraint flipped to compact on
+  // focus. That drops the conversation picker out of the Column, which moves
+  // the input bar into the slot above it; unkeyed children are matched by
+  // index and type, so the TextField was rebuilt and lost focus -- closing the
+  // keyboard, restoring the height, and flipping back. Layout mode must not
+  // depend on whether a keyboard is showing.
+  testWidgets('input keeps focus when the keyboard inset appears', (
+    tester,
+  ) async {
+    await _pumpWithProviders(
+      tester,
+      const ChatScreen(),
+      const PlayServicesStatus.available(),
+    );
+
+    final input = find.byType(TextField).first;
+    await tester.tap(input);
+    await tester.pump();
+
+    final focused = tester.widget<TextField>(input).focusNode;
+    expect(focused?.hasFocus, isTrue, reason: 'input should focus on tap');
+
+    // The conversation picker shares the Column with the input bar; if the
+    // layout flips it disappears, which is what re-parented the input.
+    expect(find.byTooltip('Filter chats'), findsOneWidget);
+
+    // Simulate the keyboard opening.
+    tester.view.viewInsets = FakeViewPadding(
+      bottom: 300 * tester.view.devicePixelRatio,
+    );
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpAndSettle();
+
+    expect(
+      focused?.hasFocus,
+      isTrue,
+      reason: 'keyboard inset must not steal focus from the input',
+    );
+    expect(
+      find.byTooltip('Filter chats'),
+      findsOneWidget,
+      reason: 'layout must not flip to compact just because a keyboard is up',
+    );
+  });
+
   // Guards the RadioGroup migration: RadioListTile's groupValue/onChanged were
   // deprecated, so selection now propagates through a RadioGroup ancestor
   // rather than each tile. If that wiring breaks, tapping an option silently
