@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:airgrid/core/rider_tones.dart';
 import 'package:airgrid/domain/models/rider_mode_event.dart';
 import 'package:airgrid/features/rider/rider_link_health.dart';
+import 'package:airgrid/features/rider/rider_mode_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -91,6 +92,50 @@ void main() {
 
     test('stale fires before lost', () {
       expect(riderPeerStaleAfter, lessThan(riderPeerLostAfter));
+    });
+  });
+
+  group('rider ended-session state', () {
+    test('the ended reason and peer name travel together', () {
+      const ended = RiderModeState(
+        endedReason: RiderSessionEndReason.peerLost,
+        endedPeerName: 'Alex',
+      );
+
+      expect(ended.endedReason, RiderSessionEndReason.peerLost);
+      expect(ended.endedPeerName, 'Alex');
+    });
+
+    test('starting a new session clears both', () {
+      const ended = RiderModeState(
+        endedReason: RiderSessionEndReason.endedByPeer,
+        endedPeerName: 'Alex',
+      );
+
+      // The panel must not caption a live session with why the last one died.
+      final restarted = ended.copyWith(isActive: true, clearEndedReason: true);
+
+      expect(restarted.endedReason, isNull);
+      expect(restarted.endedPeerName, isNull);
+    });
+
+    test('the peer name survives teardown clearing peerName', () {
+      const live = RiderModeState(
+        isActive: true,
+        peerNodeId: 'node-1',
+        peerName: 'Alex',
+      );
+
+      // clearPeer wipes peerName, which is why endedPeerName exists at all.
+      final torndown = live.copyWith(
+        isActive: false,
+        endedReason: RiderSessionEndReason.peerLost,
+        endedPeerName: live.peerName,
+        clearPeer: true,
+      );
+
+      expect(torndown.peerName, isNull);
+      expect(torndown.endedPeerName, 'Alex');
     });
   });
 

@@ -13,6 +13,7 @@ import 'package:airgrid/domain/models/known_contact.dart';
 import 'package:airgrid/domain/models/media_attachment.dart';
 import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/models/privacy_mode.dart';
+import 'package:airgrid/domain/models/rider_mode_event.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
@@ -1503,12 +1504,22 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       }),
       overlayColor: WidgetStatePropertyAll(Colors.white.withAlpha(18)),
     );
-    final status = rider.isActive
+    // A rider hears the tones but cannot read this at speed, so the value of
+    // the ended/stale states is the glance at a stop: "why did that end?".
+    // endedLocally is deliberately absent - if you hung up, you know.
+    final endedPeerName = rider.endedPeerName ?? 'Rider';
+    final status = rider.isActive && rider.isPeerLinkStale
+        ? 'Link unstable - ${rider.peerName ?? 'rider'} not responding'
+        : rider.isActive
         ? 'Live with ${rider.peerName ?? 'rider'}'
         : rider.isStarting
         ? 'Starting Rider Mode...'
         : rider.incomingPeerName != null
         ? '${rider.incomingPeerName} wants to start Rider Mode'
+        : rider.endedReason == RiderSessionEndReason.peerLost
+        ? '$endedPeerName dropped out'
+        : rider.endedReason == RiderSessionEndReason.endedByPeer
+        ? '$endedPeerName ended the session'
         : canStart
         ? 'Ready for trusted 1:1 rider audio'
         : hasUsableTarget && !isTrustedTarget
@@ -1531,7 +1542,9 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                 rider.isActive
                     ? Icons.radio_button_checked
                     : Icons.two_wheeler_rounded,
-                color: rider.isActive ? Colors.greenAccent : _radioAmber,
+                color: rider.isActive && !rider.isPeerLinkStale
+                    ? Colors.greenAccent
+                    : _radioAmber,
               ),
               const SizedBox(width: 10),
               Expanded(

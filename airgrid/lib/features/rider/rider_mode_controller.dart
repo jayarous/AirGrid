@@ -76,6 +76,11 @@ class RiderModeState {
   /// a session that stopped on its own.
   final RiderSessionEndReason? endedReason;
 
+  /// Who the ended session was with. Kept separately because teardown clears
+  /// [peerName], and "Alex dropped out" is worth more than "Rider dropped out"
+  /// to someone reading the panel a minute later.
+  final String? endedPeerName;
+
   const RiderModeState({
     this.settings = const RiderModeSettings(),
     this.isArmed = false,
@@ -94,6 +99,7 @@ class RiderModeState {
     this.lastError,
     this.isPeerLinkStale = false,
     this.endedReason,
+    this.endedPeerName,
   });
 
   RiderModeState copyWith({
@@ -114,6 +120,7 @@ class RiderModeState {
     String? lastError,
     bool? isPeerLinkStale,
     RiderSessionEndReason? endedReason,
+    String? endedPeerName,
     bool clearPeer = false,
     bool clearIncoming = false,
     bool clearLastError = false,
@@ -143,6 +150,9 @@ class RiderModeState {
       lastError: clearLastError ? null : lastError ?? this.lastError,
       isPeerLinkStale: isPeerLinkStale ?? this.isPeerLinkStale,
       endedReason: clearEndedReason ? null : endedReason ?? this.endedReason,
+      endedPeerName: clearEndedReason
+          ? null
+          : endedPeerName ?? this.endedPeerName,
     );
   }
 }
@@ -315,6 +325,7 @@ class RiderModeController extends Notifier<RiderModeState> {
     try {
       final wasActive = state.isActive;
       final peerNodeId = state.peerNodeId;
+      final peerName = state.peerName;
       final sessionId = state.sessionId;
 
       _keepaliveTimer?.cancel();
@@ -348,6 +359,7 @@ class RiderModeController extends Notifier<RiderModeState> {
         inputLevel: 0,
         isPeerLinkStale: false,
         endedReason: wasActive ? reason : null,
+        endedPeerName: wasActive ? peerName : null,
         clearPeer: true,
         clearIncoming: true,
       );
