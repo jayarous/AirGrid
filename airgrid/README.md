@@ -85,6 +85,30 @@ flutter run
 To run on Android, connect a physical device with Google Play Services
 available.
 
+### Build environment
+
+Development is on **Windows x86-64**, which builds Android natively with no
+workarounds. CI runs on `ubuntu-latest`, also x86-64 — that is fine and should
+stay as it is.
+
+The constraint worth knowing is architectural, not about the OS: Google ships
+AAPT2, CMake and the NDK toolchain as **x86-64 binaries only**. On an
+**aarch64** host they cannot execute, and the usual escape is a Gradle init
+script pinning `abiFilters` to a single ABI so the link step stops crashing.
+That produces a bundle missing `armeabi-v7a`, which uploads happily and
+silently drops 32-bit devices.
+
+`flutter test` and `flutter analyze` are pure Dart and pass on any
+architecture, so nothing warns you until a real build. Two defences:
+
+- Nothing in this repo sets `abiFilters`. Keep it that way; the defaults are
+  correct.
+- `build_release_aab.ps1` inspects the finished bundle and refuses to pass a
+  build that is missing `arm64-v8a` or `armeabi-v7a` (see below).
+
+If you ever build on a non-x86-64 host, treat any init script under
+`~/.gradle/init.d/` as a release hazard and do not let it near a Play upload.
+
 ## Play Console Release Flow
 
 Use the release helper script so every AAB build also bumps app version and
@@ -110,6 +134,19 @@ build/app/outputs/bundle/release/app-release.aab
 
 The Settings screen reads app version from platform package info, so this
 workflow keeps the in-app version label aligned with the Play Console artifact.
+
+The script ends with an **ABI check**: it opens the bundle and lists the ABIs
+actually inside it, then throws if `arm64-v8a` or `armeabi-v7a` is missing. A
+passing run prints:
+
+```text
+AAB ABIs: arm64-v8a, armeabi-v7a, x86_64
+ABI check passed: 32-bit and 64-bit ARM both present.
+```
+
+If it throws, **do not upload the bundle** — a missing `armeabi-v7a` means
+Play will stop serving 32-bit devices, and that is not visible from the upload
+UI. See the build-environment note under Setup for the usual cause.
 
 ## Local Release Signing
 

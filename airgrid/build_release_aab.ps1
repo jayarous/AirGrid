@@ -73,6 +73,38 @@ try {
     Write-Host "AAB artifact: $($artifact.FullName)"
     Write-Host "AAB size: $($artifact.Length) bytes"
     Write-Host "AAB last modified: $($artifact.LastWriteTime)"
+
+    # ── ABI guard ────────────────────────────────────────────────────────────
+    # A Gradle init script that pins abiFilters can silently strip an ABI from
+    # the bundle. Nothing in the build fails when that happens; the upload
+    # succeeds and 32-bit devices simply stop being served. This was a live
+    # hazard while the project was built on an aarch64 Linux box, which needed
+    # exactly such a script to link at all. Verify the artifact rather than
+    # trusting the environment that produced it.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($artifact.FullName)
+    try {
+      $abis = $zip.Entries |
+        Where-Object { $_.FullName -match '(^|/)lib/([^/]+)/' } |
+        ForEach-Object { [regex]::Match($_.FullName, '(^|/)lib/([^/]+)/').Groups[2].Value } |
+        Sort-Object -Unique
+    }
+    finally {
+      $zip.Dispose()
+    }
+
+    Write-Host "AAB ABIs: $($abis -join ', ')"
+
+    $requiredAbis = @('arm64-v8a', 'armeabi-v7a')
+    $missingAbis = $requiredAbis | Where-Object { $abis -notcontains $_ }
+    if ($missingAbis) {
+      throw ("AAB is missing required ABI(s): {0}. Present: {1}. " -f
+        ($missingAbis -join ', '), ($abis -join ', ')) +
+        'Do not upload this bundle. Check for a Gradle init script pinning ' +
+        'abiFilters (~/.gradle/init.d/) or an ndk.abiFilters block in ' +
+        'android/app/build.gradle.'
+    }
+    Write-Host 'ABI check passed: 32-bit and 64-bit ARM both present.'
   } else {
     Write-Warning "AAB not found at $aabPath"
   }
