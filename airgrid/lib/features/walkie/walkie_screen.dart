@@ -17,6 +17,8 @@ import 'package:airgrid/domain/models/rider_mode_event.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
+import 'package:airgrid/features/entitlement/entitlement_providers.dart';
+import 'package:airgrid/features/paywall/plus_gate.dart';
 import 'package:airgrid/features/rider/rider_mode_controller.dart';
 import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
 import 'package:flutter/material.dart';
@@ -362,6 +364,16 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     if (await _requiresTrustedContactBeforeInvite(peer)) {
       return;
     }
+    if (!mounted) return;
+    // Starting a session is Plus. Accepting one never is.
+    if (!await ensurePlus(
+      context,
+      ref,
+      gate: (gates) => gates.canStartWalkieSession,
+    )) {
+      return;
+    }
+    if (!mounted) return;
 
     final ok = await ref
         .read(chatControllerProvider.notifier)
@@ -372,6 +384,23 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           ? 'Invite sent to ${peer.displayName}'
           : 'Failed to send invite';
     });
+  }
+
+  /// Starting a rider session is Plus. Arming presence and accepting an
+  /// incoming session are not — see [RiderModeController.armPresence].
+  Future<void> _startRiderSession(MeshPeer targetPeer) async {
+    if (!await ensurePlus(
+      context,
+      ref,
+      gate: (gates) => gates.canStartRiderSession,
+    )) {
+      return;
+    }
+    if (!mounted) return;
+    _setStatus('Starting Rider Mode...');
+    await ref
+        .read(riderModeControllerProvider.notifier)
+        .startSession(targetPeer);
   }
 
   Future<bool> _requiresTrustedContactBeforeInvite(MeshPeer peer) async {
@@ -430,6 +459,11 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         state.walkie.sessionActivePeerNodeId == target.peerNodeId) {
       return;
     }
+    // Checked quietly here, and deliberately not via ensurePlus: the user did
+    // not ask to start a session, they just opened a chat. An unprompted paywall
+    // on a screen you merely navigated to is an ambush. Auto-start simply does
+    // nothing without Plus; the explicit call button still offers the paywall.
+    if (!ref.read(featureGatesProvider).canStartWalkieSession) return;
 
     final peer = _peerByNodeId(target.peerNodeId);
     if (peer == null) return;
@@ -895,6 +929,27 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
       final controller = ref.read(chatControllerProvider.notifier);
       if (_isPublicMode) {
+        // Broadcasting reaches the whole mesh and has no counterparty, so it is
+        // always Plus — unlike a private clip inside a session someone else
+        // started, which is free.
+        if (!mounted) return;
+        if (!await ensurePlus(
+          context,
+          ref,
+          gate: (gates) => gates.canBroadcastPublicWalkie,
+        )) {
+          await _deleteRecordedFile(recordedPath);
+          // Reset sending state in case it was set earlier.
+          if (mounted) {
+            controller.setWalkieSending(isSending: false);
+            controller.setWalkieLastError(null);
+            setState(() {
+              _status = 'Cancelled';
+            });
+          }
+          return;
+        }
+        if (!mounted) return;
         try {
           sendAttempted = true;
           await controller.sendPublicWalkieAudio(payload);
@@ -911,6 +966,26 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
         });
         return;
       }
+      // Private walkie outside an active session requires Plus. This gate is
+      // load-bearing: without it, free users could bypass the paywall by just
+      // holding the button instead of inviting — see FeatureGates for details.
+      if (!await ensurePlus(
+        context,
+        ref,
+        gate: (gates) => gates.canTransmitPrivateWalkie(inActiveSession: false),
+      )) {
+        await _deleteRecordedFile(recordedPath);
+        // Reset sending state in case it was set earlier.
+        if (mounted) {
+          controller.setWalkieSending(isSending: false);
+          controller.setWalkieLastError(null);
+          setState(() {
+            _status = 'Cancelled';
+          });
+        }
+        return;
+      }
+
       // Resolve through _currentTarget rather than reading the selected
       // conversation directly: accepting an invite establishes a session
       // without ever setting selectedConversation, so the receiving side would
@@ -1697,8 +1772,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                         : canStart && !rider.isStarting
                         ? () {
                             _triggerButtonFeedback();
-                            _setStatus('Starting Rider Mode...');
-                            unawaited(riderController.startSession(targetPeer));
+                            unawaited(_startRiderSession(targetPeer));
                           }
                         : null,
                     icon: Icon(
@@ -2622,16 +2696,28 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                   if (!mounted) return;
                                   await navigator.pushNamed(AppRouter.chat);
                                 },
-                                onToggleStayOnline: () {
+                                onToggleStayOnline: () async {
                                   if (!stayOnlineEnabled) return;
                                   _triggerButtonFeedback();
                                   if (_isPublicMode) {
+                                    // Only switching it on is Plus; switching
+                                    // off must always work.
+                                    if (!stayOnlineOn &&
+                                        !await ensurePlus(
+                                          context,
+                                          ref,
+                                          gate: (gates) =>
+                                              gates.canEnablePublicWalkie,
+                                        )) {
+                                      return;
+                                    }
+                                    if (!mounted) return;
                                     _setStatus(
                                       !stayOnlineOn
                                           ? 'Public stay online turned on'
                                           : 'Public stay online turned off',
                                     );
-                                    controller.setPublicWalkieStayOnline(
+                                    await controller.setPublicWalkieStayOnline(
                                       !stayOnlineOn,
                                     );
                                   } else if (targetNodeId != null) {
@@ -2659,15 +2745,30 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                       );
                                       return;
                                     }
-                                    if (!contact.isTrusted) {
-                                      controller.trustContact(targetNodeId);
+                                    // Always-on auto-starts sessions, so
+                                    // switching it on is Plus. Off is free.
+                                    if (!stayOnlineOn &&
+                                        !await ensurePlus(
+                                          context,
+                                          ref,
+                                          gate: (gates) =>
+                                              gates.canStartWalkieSession,
+                                        )) {
+                                      return;
                                     }
+                                    if (!mounted) return;
+                                    if (!contact.isTrusted) {
+                                      await controller.trustContact(
+                                        targetNodeId,
+                                      );
+                                    }
+                                    if (!mounted) return;
                                     _setStatus(
                                       !stayOnlineOn
                                           ? 'Private stay online turned on'
                                           : 'Private stay online turned off',
                                     );
-                                    controller.setWalkieAlwaysOn(
+                                    await controller.setWalkieAlwaysOn(
                                       targetNodeId,
                                       !stayOnlineOn,
                                     );

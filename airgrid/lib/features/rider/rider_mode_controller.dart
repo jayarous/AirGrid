@@ -12,6 +12,7 @@ import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/domain/models/rider_mode_event.dart';
 import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
+import 'package:airgrid/features/entitlement/entitlement_providers.dart';
 import 'package:airgrid/features/rider/rider_link_health.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -231,13 +232,32 @@ class RiderModeController extends Notifier<RiderModeState> {
         .save(state.settings.copyWith(startPolicy: policy));
   }
 
+  /// Arming rider presence is **always free**, on every tier.
+  ///
+  /// Two reasons, either of which is sufficient. It is how peers *discover* that
+  /// this node is available to ride, so gating it would make free users invisible
+  /// to paying riders and break the feature for the people who paid. And it is
+  /// published inside a `key_announce` packet, so gating it would change what
+  /// goes on the wire.
   Future<void> armPresence(bool armed) async {
     state = state.copyWith(isArmed: armed);
     await _publishPresence(armed: armed);
   }
 
+  /// Starts a rider session. **Plus only.**
+  ///
+  /// Only starting. [acceptIncoming], [declineIncoming] and the trusted
+  /// auto-join path are free on every tier — a rider session needs two people,
+  /// and gating the far end would break it for the subscriber.
   Future<void> startSession(MeshPeer peer) async {
     if (state.isStarting || state.isActive) return;
+    if (!ref.read(featureGatesProvider).canStartRiderSession) {
+      AirGridLogger.log(
+        LogCategory.billing,
+        'Rider session start blocked: Plus required',
+      );
+      return;
+    }
     final nodeId = peer.nodeId;
     if (nodeId == null) return;
     if (!_canUseRiderWith(nodeId, peer)) {
@@ -279,6 +299,7 @@ class RiderModeController extends Notifier<RiderModeState> {
     }
   }
 
+  /// Accepting an incoming rider session is **always free**. See [startSession].
   Future<void> acceptIncoming() async {
     final peerNodeId = state.incomingPeerNodeId;
     final sessionId = state.incomingSessionId;

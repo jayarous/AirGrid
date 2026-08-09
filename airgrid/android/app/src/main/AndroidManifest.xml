@@ -104,5 +104,19 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!--
+            Required for url_launcher's canLaunchUrl to see https handlers.
+
+            Package visibility filtering applies because targetSdk is 30 or
+            above, and without this canLaunchUrl returns false for https on
+            Android 11+ even though launching would have worked. That failure is
+            invisible to `flutter analyze` and to every widget test: the button
+            simply reports it cannot open the page, on almost every modern
+            device. Used by the Play subscription-centre link on the paywall.
+        -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
     </queries>
 </manifest>

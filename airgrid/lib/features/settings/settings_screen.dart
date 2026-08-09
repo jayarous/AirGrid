@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/battery_optimization_bridge.dart';
@@ -7,15 +8,21 @@ import 'package:airgrid/core/help_target.dart';
 import 'package:airgrid/core/logger.dart';
 import 'package:airgrid/core/mesh_permissions.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
+import 'package:airgrid/domain/models/entitlement.dart';
 import 'package:airgrid/domain/models/privacy_mode.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
+import 'package:airgrid/features/entitlement/entitlement_providers.dart';
 import 'package:airgrid/features/nearby/nearby_preferences.dart';
+import 'package:airgrid/features/paywall/paywall_controller.dart';
+import 'package:airgrid/features/paywall/paywall_screen.dart';
+import 'package:airgrid/features/paywall/plus_gate.dart';
 import 'package:airgrid/features/settings/profile_avatar_catalog.dart';
 import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -34,6 +41,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   final _scrollController = ScrollController();
   final _permissionsKey = GlobalKey();
   bool _requestingPermissions = false;
+  bool _restoringPurchases = false;
+  bool _exportingHistory = false;
   double _smoothingAlpha = nearbyDefaultSmoothingAlpha;
   SharedPreferences? _prefs;
   late Future<MeshPermissionsSnapshot> _permissionsFuture;
@@ -214,6 +223,124 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     await prefs.setDouble(nearbySmoothingAlphaPrefKey, alpha);
   }
 
+  /// Opens the paywall from Settings.
+  ///
+  /// Deliberately not routed through `ensurePlus`: that returns immediately
+  /// when the user is already entitled, which is correct for a gated action but
+  /// would make this row do nothing for the very people paying for it.
+  Future<void> _openPaywall() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const PaywallScreen()),
+    );
+  }
+
+  /// Re-asks Google Play what this account already owns.
+  ///
+  /// The case that matters is a reinstall or a new phone: the cached
+  /// entitlement is gone, and every other route to restore runs through the
+  /// paywall — which a subscriber only reaches by walking into a feature that
+  /// has locked on them. That is a support ticket, not a flow.
+  ///
+  /// Routed through [PaywallController.restore] rather than reimplemented here,
+  /// so reconciliation, the rollback ceiling and the "unreachable Play is not
+  /// the same as no subscription" distinction all stay in one place.
+  Future<void> _restorePurchases() async {
+    setState(() => _restoringPurchases = true);
+    final restored = await ref
+        .read(paywallControllerProvider.notifier)
+        .restore();
+    if (!mounted) return;
+    setState(() => _restoringPurchases = false);
+
+    // The controller's message separates "Play could not be reached" from "this
+    // account owns nothing" — never flatten the two into one answer.
+    final message = ref.read(paywallControllerProvider).message;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          restored
+              ? 'AirGrid Plus restored on this device.'
+              : message ?? 'No subscription found on this Google account.',
+        ),
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  /// Writes the whole local history to a text file and offers it to the share
+  /// sheet. **Plus only.**
+  ///
+  /// A file rather than share-sheet text, unlike [_shareDiagnostics] and the
+  /// reports export: history runs to a thousand messages, and receiving apps
+  /// truncate or choke on a body that size.
+  Future<void> _exportHistory() async {
+    // Checked before any work, mirroring the file picker in `chat_screen`:
+    // building a transcript and only then demanding payment for it would be
+    // gratuitous.
+    if (!await ensurePlus(
+      context,
+      ref,
+      gate: (gates) => gates.canExportHistory,
+    )) {
+      return;
+    }
+    if (!mounted) return;
+
+    setState(() => _exportingHistory = true);
+    try {
+      final transcript = await ref
+          .read(chatControllerProvider.notifier)
+          .exportMessageHistory();
+      if (!mounted) return;
+
+      // Null means the gate refused below the UI, which `ensurePlus` should
+      // already have prevented. Empty means there is genuinely nothing stored.
+      if (transcript == null) return;
+      if (transcript.isEmpty) {
+        _showExportMessage('No messages to export yet.');
+        return;
+      }
+
+      final file = await _writeExportFile(transcript);
+      if (!mounted) return;
+
+      await Share.shareXFiles([
+        XFile(file.path, mimeType: 'text/plain'),
+      ], subject: 'AirGrid message history');
+    } catch (error) {
+      AirGridLogger.log(LogCategory.storage, 'History export failed: $error');
+      if (!mounted) return;
+      _showExportMessage('Could not create the export file.');
+    } finally {
+      if (mounted) setState(() => _exportingHistory = false);
+    }
+  }
+
+  /// Names the file for the date it was made, so several exports sitting in a
+  /// downloads folder stay tellable apart.
+  Future<File> _writeExportFile(String transcript) async {
+    final now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final stamp =
+        '${now.year}${two(now.month)}${two(now.day)}'
+        '-${two(now.hour)}${two(now.minute)}';
+
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/airgrid-messages-$stamp.txt');
+    return file.writeAsString(transcript);
+  }
+
+  void _showExportMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   Future<void> _clearAllChats() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -287,6 +414,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   Widget build(BuildContext context) {
     final identity = ref.watch(localIdentityStoreProvider);
     final state = ref.watch(chatControllerProvider);
+    final entitlement = ref.watch(entitlementProvider);
+    final isPlus = ref.watch(featureGatesProvider).isPlus;
     final cs = Theme.of(context).colorScheme;
     final displayName = identity.displayName?.trim();
     final blockedContacts = state.knownContacts
@@ -335,6 +464,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               if (!mounted) return;
               setState(() {});
             },
+          ),
+          const SizedBox(height: 16),
+          _SettingsSection(
+            title: 'AirGrid Plus',
+            children: [
+              _SettingsRow(
+                icon: isPlus
+                    ? Icons.workspace_premium
+                    : Icons.workspace_premium_outlined,
+                iconColor: isPlus ? Colors.amber.shade700 : null,
+                title: 'Subscription',
+                subtitle: _plusSubtitle(entitlement),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _openPaywall,
+              ),
+              _SettingsRow(
+                icon: Icons.restore_rounded,
+                title: 'Restore purchases',
+                subtitle:
+                    'Look for a subscription bought earlier on this Google '
+                    'account — after a reinstall or on a new phone',
+                trailing: _restoringPurchases
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.chevron_right),
+                onTap: _restoringPurchases ? null : _restorePurchases,
+              ),
+            ],
           ),
           const SizedBox(height: 16),
           _SettingsSection(
@@ -594,6 +754,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 monospaceSubtitle: true,
               ),
               _SettingsRow(
+                icon: Icons.download_outlined,
+                title: 'Export message history',
+                subtitle: 'Save every conversation as a text file',
+                trailing: _exportingHistory
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.chevron_right),
+                onTap: _exportingHistory ? null : _exportHistory,
+              ),
+              _SettingsRow(
                 icon: Icons.bug_report_outlined,
                 title: 'Report a problem',
                 subtitle:
@@ -643,6 +816,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
       ),
     );
   }
+}
+
+/// What the Settings subscription row says about the current entitlement.
+///
+/// Reads the full [EntitlementStatus] rather than a plain "is Plus" boolean, so
+/// the two states that look identical from the outside — confirmed by Play just
+/// now, versus trusted offline because Play is unreachable — stay
+/// distinguishable. Someone off-grid wondering whether their subscription still
+/// counts is exactly who opens this screen, and telling them only "active"
+/// would hide the one fact they came for.
+String _plusSubtitle(Entitlement entitlement) {
+  final plan = switch (entitlement.period) {
+    BillingPeriod.weekly => 'Weekly',
+    BillingPeriod.monthly => 'Monthly',
+    BillingPeriod.yearly => 'Yearly',
+    // A restore after reinstall cannot recover which plan was bought — Play
+    // does not report the base plan back. Say "Plus" rather than guess.
+    null => 'Plus',
+  };
+
+  return switch (entitlement.statusAt(DateTime.now())) {
+    EntitlementStatus.free => 'Free — see what Plus unlocks',
+    EntitlementStatus.active => '$plan plan, active',
+    EntitlementStatus.offlineTrusted =>
+      '$plan plan, active — will re-check with Google Play once you are back '
+          'online',
+    EntitlementStatus.lapsed => 'Your $plan plan has expired',
+  };
 }
 
 String _meshSubtitle(dynamic state) {

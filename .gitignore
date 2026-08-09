@@ -9,6 +9,7 @@
 *.keystore
 *.p12
 key.properties
+key.properties.bak
 release-signing/
 
 # ── Device logs (contain real mesh node UUIDs) ───────────────────────────────

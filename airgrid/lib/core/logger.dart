@@ -11,6 +11,7 @@ enum LogCategory {
   validation,
   storage,
   crypto,
+  billing,
 }
 
 class AirGridLogger {

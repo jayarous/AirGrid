@@ -1,0 +1,28 @@
+AirGrid v1.0.12 — What's New
+
+🎯 Introducing AirGrid Plus (Prepaid Subscription)
+
+Experience true offline communication with our new premium tier:
+
+• Offline Walkie-Talkie Mode - Start live PTT sessions that work without internet or mesh peers nearby
+• Unlimited History & Export - Keep your entire conversation history and export when needed
+• File Sharing + Longer Clips - Send arbitrary files and extended voice clips
+• Rider Mode - Continuous background operation for power users
+
+💰 Simple Prepaid Plans (No Auto-Renewal)
+• Weekly: 0.99 AED — Perfect for festivals, hikes, events
+• Monthly: 1.99 AED — Best value for regular users  
+• Yearly: 11.99 AED — Save 84% vs weekly plans
+
+🔒 Privacy-First Design
+All features work completely offline once purchased. Your mesh node identity stays anonymous — we never link payments to your network presence.
+
+✨ What Stays Free Forever
+Public & private mesh chat, voice notes, location sharing, encryption, safety numbers, and receiving messages from Plus users remain free for everyone.
+
+🛠️ Technical Improvements
+• Enhanced offline entitlement verification with extended trust windows
+• Improved mesh relay performance
+• Bug fixes and stability improvements
+
+Note: This release prepares the foundation for subscription features. Full billing integration will be enabled in an upcoming update. Existing Rider Mode and walkie features continue to work freely.

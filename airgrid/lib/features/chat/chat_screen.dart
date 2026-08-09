@@ -20,6 +20,7 @@ import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/chat/message_bubble.dart';
 import 'package:airgrid/features/mesh_status/mesh_status_panel.dart';
+import 'package:airgrid/features/paywall/plus_gate.dart';
 import 'package:airgrid/features/profile/peer_profile_sheet.dart';
 import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
 import 'package:file_picker/file_picker.dart';
@@ -417,6 +418,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         );
         return;
       }
+
+      // Checked before the picker opens, not after: making someone browse for a
+      // file and only then telling them it needs Plus would be gratuitous.
+      // Images and voice notes are unaffected — only files are gated.
+      if (!await ensurePlus(
+        context,
+        ref,
+        gate: (gates) => gates.canSendFileAttachment,
+      )) {
+        return;
+      }
+      if (!mounted) return;
 
       FocusScope.of(context).unfocus();
       await Future<void>.delayed(const Duration(milliseconds: 50));

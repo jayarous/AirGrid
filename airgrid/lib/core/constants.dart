@@ -99,6 +99,14 @@ class AirGridConstants {
   /// Maximum age of messages to keep in ChatController.
   static const Duration kChatMaxAge = Duration(days: 30);
 
+  /// Upper bound on messages read for a history export.
+  ///
+  /// Deliberately well above [kChatMaxMessages]. Pruning is debounced and
+  /// scheduled, so the table can briefly hold more rows than the retention
+  /// policy allows — and an export that quietly stopped at the cap would drop
+  /// the user's oldest messages without ever saying so.
+  static const int kHistoryExportLimit = 5000;
+
   /// Minimum interval between location updates.
   static const Duration kLocationUpdateMinInterval = Duration(seconds: 45);
 

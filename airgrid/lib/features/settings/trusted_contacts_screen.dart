@@ -1,4 +1,5 @@
 import 'package:airgrid/features/chat/chat_controller.dart';
+import 'package:airgrid/features/paywall/plus_gate.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -94,6 +95,18 @@ class TrustedContactsScreen extends ConsumerWidget {
                           Switch.adaptive(
                             value: contact.walkieAlwaysOn,
                             onChanged: (enabled) async {
+                              // Always-on auto-starts sessions, so switching it
+                              // on is Plus. Switching it off always works.
+                              if (enabled &&
+                                  !await ensurePlus(
+                                    context,
+                                    ref,
+                                    gate: (gates) =>
+                                        gates.canStartWalkieSession,
+                                  )) {
+                                return;
+                              }
+                              if (!context.mounted) return;
                               await ref
                                   .read(chatControllerProvider.notifier)
                                   .setWalkieAlwaysOn(contact.nodeId, enabled);

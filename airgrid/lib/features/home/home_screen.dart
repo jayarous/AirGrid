@@ -11,6 +11,7 @@ import 'package:airgrid/domain/models/mesh_peer.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
+import 'package:airgrid/features/home/home_app_bar_title.dart';
 import 'package:airgrid/features/profile/peer_profile_sheet.dart';
 import 'package:airgrid/features/settings/profile_avatar_catalog.dart';
 import 'package:airgrid/features/walkie/public_walkie_status_icon.dart';
@@ -258,12 +259,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         elevation: 0,
         scrolledUnderElevation: 2,
         backgroundColor: cs.surface.withAlpha(240),
-        title: Image.asset(
-          'assets/images/airgrid_horizontal.png',
-          height: 32,
-          fit: BoxFit.contain,
-          alignment: Alignment.centerLeft,
-        ),
+        title: const HomeAppBarTitle(),
         titleSpacing: 16,
         actions: [
           const PublicWalkieStatusIcon(),

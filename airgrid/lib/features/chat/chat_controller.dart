@@ -5,7 +5,10 @@ import 'dart:typed_data';
 
 import 'package:airgrid/core/constants.dart';
 import 'package:airgrid/core/crypto_service.dart';
+import 'package:airgrid/core/feature_gates.dart';
 import 'package:airgrid/core/foreground_service_bridge.dart';
+import 'package:airgrid/core/logger.dart';
+import 'package:airgrid/core/message_history_export.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/core/validation.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
@@ -32,6 +35,7 @@ import 'package:airgrid/features/chat/automatic_image_retry_controller.dart';
 import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/chat/walkie_session_controller.dart';
+import 'package:airgrid/features/entitlement/entitlement_providers.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -235,6 +239,13 @@ class ChatController extends Notifier<ChatState> {
       ref.read(privacySettingsStoreProvider);
   PublicWalkieSettingsStore get _publicWalkieStore =>
       ref.read(publicWalkieSettingsStoreProvider);
+
+  /// Subscription gates.
+  ///
+  /// The UI checks these too, and opens the paywall when they are closed. These
+  /// controller-level checks are the backstop, matching how validation is
+  /// layered everywhere else here: the UI checks, and the boundary checks again.
+  FeatureGates get _gates => ref.read(featureGatesProvider);
   BatterySettingsStore get _batteryStore =>
       ref.read(batterySettingsStoreProvider);
   ChatListPreferencesStore get _chatListPrefs =>
@@ -256,8 +267,27 @@ class ChatController extends Notifier<ChatState> {
     if (_publicWalkieSettingLoaded) return;
     _publicWalkieSettingLoaded = true;
     final publicWalkieStore = _publicWalkieStore;
-    final enabled = await publicWalkieStore.getStayOnlineEnabled();
+    final stored = await publicWalkieStore.getStayOnlineEnabled();
     if (_isDisposed) return;
+
+    // Re-check the gate on restore, don't just replay what was saved.
+    //
+    // Someone who had public walkie switched on before Plus existed carries a
+    // stored `true` across the update, and the toggle in `walkie_screen` only
+    // asks `ensurePlus` on the way *on* — so a setting restored already-on is
+    // never gated by anything and the feature stays free forever. The same
+    // applies to a subscription that lapses.
+    //
+    // The stored preference is left untouched: if they subscribe later, the
+    // switch they last chose comes back on its own.
+    final enabled = stored && _gates.canEnablePublicWalkie;
+    if (stored && !enabled) {
+      AirGridLogger.log(
+        LogCategory.billing,
+        'Public walkie stay-online not restored: Plus required',
+      );
+    }
+
     state = state.copyWith(
       walkie: state.walkie.copyWith(publicStayOnline: enabled),
     );
@@ -1075,6 +1105,7 @@ class ChatController extends Notifier<ChatState> {
     String? packetId,
     bool emitLocalMessage = true,
   }) async {
+    if (!_mayTransmitPrivateAudio(audio)) return PrivateSendResult.failed;
     try {
       return await _mesh.sendPrivateAudio(
         peer,
@@ -1096,6 +1127,7 @@ class ChatController extends Notifier<ChatState> {
     String? packetId,
     bool emitLocalMessage = true,
   }) async {
+    if (!_mayTransmitPrivateAudio(audio)) return PrivateSendResult.failed;
     try {
       return await _mesh.sendPrivateAudioToContact(
         contact,
@@ -1110,10 +1142,65 @@ class ChatController extends Notifier<ChatState> {
   }
 
   /// Broadcast a walkie-talkie voice clip on the public channel.
+  /// Broadcasts a public walkie clip to the whole mesh. **Plus only.**
+  ///
+  /// Gating the stay-online toggle alone was not enough: the push-to-talk button
+  /// in public mode reaches this directly, so the broadcast itself has to be
+  /// gated too.
   Future<void> sendPublicWalkieAudio(AudioAttachmentPayload audio) async {
+    if (!_gates.canBroadcastPublicWalkie) {
+      AirGridLogger.log(
+        LogCategory.billing,
+        'Public walkie broadcast blocked: Plus required',
+      );
+      throw StateError('AirGrid Plus is required to broadcast public walkie.');
+    }
     await _mesh.sendPublicAudio(audio);
   }
 
+  /// Whether this device may transmit [audio] on a private thread right now.
+  ///
+  /// Voice notes always pass — a voice note is a chat message, and chat is free.
+  /// Walkie clips pass inside an active session (the accept-side rule: a free
+  /// peer must be able to talk back for the whole session) but not outside one,
+  /// where transmitting would amount to starting a session without an invite.
+  bool _mayTransmitPrivateAudio(AudioAttachmentPayload audio) {
+    if (audio.source != AudioAttachmentPayload.sourceWalkie) return true;
+    final allowed = _gates.canTransmitPrivateWalkie(
+      inActiveSession: state.walkie.hasActiveSession,
+    );
+    if (!allowed) {
+      AirGridLogger.log(
+        LogCategory.billing,
+        'Private walkie transmit blocked outside a session: Plus required',
+      );
+    }
+    return allowed;
+  }
+
+  /// Backstop for a gated file send that got past the UI.
+  ///
+  /// Reports [PrivateSendResult.failed] rather than a dedicated "needs Plus"
+  /// result on purpose: that enum lives in `mesh_service.dart`, and putting
+  /// entitlement vocabulary there would compromise the one file that has to stay
+  /// tier-blind. The UI opens the paywall before ever reaching this, so this
+  /// path should not be hit — hence the log line if it ever is.
+  PrivateSendResult _fileSendBlocked() {
+    AirGridLogger.log(
+      LogCategory.billing,
+      'File send blocked: Plus required (UI gate was bypassed)',
+    );
+    return PrivateSendResult.failed;
+  }
+
+  /// Sends a file attachment. **Plus only.**
+  ///
+  /// Gated by attachment *type*, never by size. Size caps are derived from
+  /// `kMaxPacketBytes` and are part of the wire contract — raising one for paid
+  /// users would need receivers to accept a larger envelope, which is a
+  /// wire-format change, not a flag flip. Images and voice notes stay free.
+  ///
+  /// Receiving a file is always free on every tier.
   Future<PrivateSendResult> sendPrivateFile(
     MeshPeer peer,
     FileAttachmentPayload file, {
@@ -1123,6 +1210,7 @@ class ChatController extends Notifier<ChatState> {
     bool emitLocalMessage = true,
     void Function(double progress)? onProgress,
   }) async {
+    if (!_gates.canSendFileAttachment) return _fileSendBlocked();
     try {
       return await _mesh.sendPrivateFile(
         peer,
@@ -1138,6 +1226,8 @@ class ChatController extends Notifier<ChatState> {
     }
   }
 
+  /// Sends a file attachment to a known contact. **Plus only.** See
+  /// [sendPrivateFile].
   Future<PrivateSendResult> sendPrivateFileToContact(
     KnownContact contact,
     FileAttachmentPayload file, {
@@ -1146,6 +1236,7 @@ class ChatController extends Notifier<ChatState> {
     bool emitLocalMessage = true,
     void Function(double progress)? onProgress,
   }) async {
+    if (!_gates.canSendFileAttachment) return _fileSendBlocked();
     try {
       return await _mesh.sendPrivateFileToContact(
         contact,
@@ -1382,14 +1473,29 @@ class ChatController extends Notifier<ChatState> {
     );
   }
 
+  /// Starts a private walkie session. **Plus only.**
   Future<bool> sendWalkieInvite(MeshPeer peer) async {
+    if (!_gates.canStartWalkieSession) {
+      AirGridLogger.log(
+        LogCategory.billing,
+        'Walkie invite blocked: Plus required',
+      );
+      return false;
+    }
     return _walkieSession.sendInvite(peer);
   }
 
+  /// Accepting is **always free**, on every tier.
+  ///
+  /// If a free peer could not accept, a paying user's headline feature would
+  /// only work when the other person had also paid — so the payer would hit a
+  /// wall and blame the app, not the paywall. A free peer taking part for the
+  /// full session is also the best demonstration of the feature there is.
   Future<bool> acceptWalkieInvite() async {
     return _walkieSession.acceptInvite();
   }
 
+  /// Always free — a user must be able to refuse.
   Future<bool> declineWalkieInvite() async {
     return _walkieSession.declineInvite();
   }
@@ -1398,6 +1504,7 @@ class ChatController extends Notifier<ChatState> {
     return _walkieSession.cancelInvite();
   }
 
+  /// Always free — never trap anyone in a session they cannot leave.
   Future<bool> endWalkieSession() async {
     return _walkieSession.endSession();
   }
@@ -1547,7 +1654,17 @@ class ChatController extends Notifier<ChatState> {
     _refreshKnownContactsFromStore();
   }
 
+  /// Auto-starts a private walkie session with [nodeId] whenever they are
+  /// online. **Enabling is Plus only**, because its whole purpose is starting
+  /// sessions; turning it off always works.
   Future<void> setWalkieAlwaysOn(String nodeId, bool enabled) async {
+    if (enabled && !_gates.canStartWalkieSession) {
+      AirGridLogger.log(
+        LogCategory.billing,
+        'Walkie always-on blocked: Plus required',
+      );
+      return;
+    }
     await _contactStore.setWalkieAlwaysOn(nodeId, enabled);
     _refreshKnownContactsFromStore();
     await publishWalkieAvailability(enabled);
@@ -1602,7 +1719,22 @@ class ChatController extends Notifier<ChatState> {
     state = state.copyWith(privacyMode: mode);
   }
 
+  /// Toggles public walkie broadcasting. **Enabling is Plus only.**
+  ///
+  /// Only enabling is gated. Turning it *off* always works — a lapsed subscriber
+  /// must never be stuck broadcasting with no way to stop.
+  ///
+  /// Receiving and relaying public walkie audio is unaffected and always free;
+  /// if free devices stopped relaying `audio`, public walkie would break for
+  /// exactly the people paying for it.
   Future<void> setPublicWalkieStayOnline(bool enabled) async {
+    if (enabled && !_gates.canEnablePublicWalkie) {
+      AirGridLogger.log(
+        LogCategory.billing,
+        'Public walkie enable blocked: Plus required',
+      );
+      return;
+    }
     await _publicWalkieStore.setStayOnlineEnabled(enabled);
     state = state.copyWith(
       walkie: state.walkie.copyWith(publicStayOnline: enabled),
@@ -1694,6 +1826,45 @@ class ChatController extends Notifier<ChatState> {
   /// Returns all saved reports as exportable plain text.
   Future<String> exportReports() async {
     return _reportStore.exportText();
+  }
+
+  /// Builds the full local message history as plain text. **Plus only.**
+  ///
+  /// Returns null when the gate refuses, and an empty string when there is
+  /// simply nothing stored — two different answers the caller has to tell
+  /// apart, since one means "open the paywall" and the other means "you have
+  /// no messages yet".
+  ///
+  /// Re-checks the gate even though `ensurePlus` already ran in the UI, for the
+  /// same reason [sendPrivateFile] does: this is the layer that must hold if a
+  /// future call site forgets. Reaching the log line means a UI gate was
+  /// bypassed.
+  ///
+  /// Walkie clips are left out. They are push-to-talk audio that was never part
+  /// of a readable conversation — the same reason [_isWalkieMessage] keeps them
+  /// out of loaded history.
+  Future<String?> exportMessageHistory() async {
+    if (!_gates.canExportHistory) {
+      AirGridLogger.log(
+        LogCategory.billing,
+        'History export blocked: Plus required (UI gate was bypassed)',
+      );
+      return null;
+    }
+
+    final stored = await _repo.loadRecent(
+      limit: AirGridConstants.kHistoryExportLimit,
+    );
+    final messages = stored.where((m) => !_isWalkieMessage(m)).toList();
+
+    return formatMessageHistory(
+      messages: messages,
+      deviceName: _identity.displayName?.trim().isNotEmpty == true
+          ? _identity.displayName!.trim()
+          : 'You',
+      deviceNodeId: _identity.nodeId,
+      exportedAt: DateTime.now(),
+    );
   }
 
   Future<void> _publishPosition(Position position, {bool force = false}) async {

@@ -2,6 +2,7 @@ import 'package:airgrid/core/constants.dart';
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
+import 'package:airgrid/data/storage/entitlement_store.dart';
 import 'package:airgrid/data/storage/known_contact_store.dart';
 import 'package:airgrid/data/storage/local_identity_store.dart';
 import 'package:airgrid/data/storage/local_report_store.dart';
@@ -17,6 +18,7 @@ import 'package:airgrid/domain/services/mesh_service.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/chat/walkie_session_controller.dart';
+import 'package:airgrid/features/entitlement/entitlement_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -85,6 +87,12 @@ ProviderContainer _container({
       ),
       batterySettingsStoreProvider.overrideWithValue(
         InMemoryBatterySettingsStore(),
+      ),
+      // These cases exercise walkie mechanics, not the paywall, so they run as
+      // a subscriber. Free-tier gate behaviour is covered by
+      // plus_gate_enforcement_test.dart.
+      entitlementStoreProvider.overrideWithValue(
+        InMemoryEntitlementStore(initial: plusTestEntitlement()),
       ),
     ],
   );
