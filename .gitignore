@@ -20,4 +20,5 @@ logs/
 patch*.js
 patch*.dart
 fix_*.ps1
+try-keystore-passwords.ps1
 test.txt
