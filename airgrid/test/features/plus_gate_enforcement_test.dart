@@ -186,7 +186,10 @@ void main() {
   });
 
   group('public walkie', () {
-    test('cannot be switched on without Plus', () async {
+    test('can be switched on without Plus', () async {
+      // Public walkie is free. This assertion is the inverse of the one it
+      // replaced, kept rather than deleted so that re-gating breaks a test
+      // instead of passing quietly.
       final h = await _harness();
       final controller = h.container.read(chatControllerProvider.notifier);
 
@@ -194,7 +197,7 @@ void main() {
 
       expect(
         h.container.read(chatControllerProvider).walkie.publicStayOnline,
-        isFalse,
+        isTrue,
       );
     });
 
@@ -230,25 +233,23 @@ void main() {
       );
     });
 
-    test(
-      'a setting saved before Plus existed is not restored for free',
-      () async {
-        // The update path that mattered: public walkie was switched on in a build
-        // where it was free, the preference survives the update, and the toggle
-        // only consults the gate on the way *on* — so a restored-on setting was
-        // never gated by anything.
-        final h = await _harness(publicWalkieEnabled: true);
+    test('a saved setting is restored on the free tier', () async {
+      // This once asserted the opposite: while public walkie was paid, a
+      // preference saved in an older build had to be re-gated on restore,
+      // because the toggle only consults a gate on the way *on*.
+      //
+      // Now that it is free there is nothing to re-check, and the user's
+      // stored choice must simply come back.
+      final h = await _harness(publicWalkieEnabled: true);
 
-        h.container.read(chatControllerProvider.notifier);
-        await pumpEventQueue();
+      h.container.read(chatControllerProvider.notifier);
+      await pumpEventQueue();
 
-        expect(
-          h.container.read(chatControllerProvider).walkie.publicStayOnline,
-          isFalse,
-          reason: 'a persisted setting must not grandfather a paid feature',
-        );
-      },
-    );
+      expect(
+        h.container.read(chatControllerProvider).walkie.publicStayOnline,
+        isTrue,
+      );
+    });
 
     test('a saved setting is restored for a subscriber', () async {
       final h = await _harness(entitlement: _plus(), publicWalkieEnabled: true);
@@ -429,16 +430,21 @@ void main() {
           dataBase64: 'AAAA',
         );
 
-    test('public broadcast is refused on the free tier', () async {
-      // Gating the stay-online toggle alone left the push-to-talk button open.
+    test('public broadcast is allowed on the free tier', () async {
+      // The inverse of the assertion this replaces, kept so that re-gating
+      // public broadcast fails a test rather than passing quietly.
+      //
+      // Broadcast is still bounded — by the airtime budget in the mesh
+      // service, which applies to every tier. See
+      // test/domain/mesh_service_public_airtime_test.dart.
       final h = await _harness();
-      expect(
-        () => h.container
+      await expectLater(
+        h.container
             .read(chatControllerProvider.notifier)
             .sendPublicWalkieAudio(
               audio(source: AudioAttachmentPayload.sourceWalkie),
             ),
-        throwsA(isA<StateError>()),
+        completes,
       );
     });
 

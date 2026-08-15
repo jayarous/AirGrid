@@ -22,10 +22,22 @@ void main() {
     test('cannot start what is paid', () {
       expect(gates.isPlus, isFalse);
       expect(gates.canStartWalkieSession, isFalse);
-      expect(gates.canEnablePublicWalkie, isFalse);
       expect(gates.canStartRiderSession, isFalse);
       expect(gates.canSendFileAttachment, isFalse);
       expect(gates.canExportHistory, isFalse);
+    });
+
+    test('can broadcast on public walkie', () {
+      // Public walkie is free, and deliberately so: it works with strangers
+      // and needs no contact list, so it is the one live-voice feature a lone
+      // user can try on the day they install.
+      //
+      // What bounds broadcast is the airtime budget in the mesh service, not
+      // this gate — see FeatureGates.canBroadcastPublicWalkie. If these ever
+      // go back to `isPlus`, that would throttle non-payers while leaving
+      // payers unbounded, which is not what the mesh needs from a limit.
+      expect(gates.canEnablePublicWalkie, isTrue);
+      expect(gates.canBroadcastPublicWalkie, isTrue);
     });
 
     test('can still join a walkie session it did not start', () {

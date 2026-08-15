@@ -1,6 +1,5 @@
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/features/chat/chat_controller.dart';
-import 'package:airgrid/features/paywall/plus_gate.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -26,17 +25,6 @@ class PublicWalkieStatusIcon extends ConsumerWidget {
       child: InkResponse(
         radius: 24,
         onTap: () async {
-          // Turning it off is always allowed; only turning it on is Plus. A
-          // lapsed subscriber must never be stuck broadcasting.
-          if (!active &&
-              !await ensurePlus(
-                context,
-                ref,
-                gate: (gates) => gates.canEnablePublicWalkie,
-              )) {
-            return;
-          }
-          if (!context.mounted) return;
           await ref
               .read(chatControllerProvider.notifier)
               .setPublicWalkieStayOnline(!active);

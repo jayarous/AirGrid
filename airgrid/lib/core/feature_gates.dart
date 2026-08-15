@@ -66,23 +66,35 @@ class FeatureGates {
 
   // ── Public walkie ────────────────────────────────────────────────────────
 
-  /// Broadcasting to the whole mesh. Gating this also helps mesh health: an
-  /// 8-hop flood of a 96 KiB clip is the heaviest traffic AirGrid carries, and
-  /// the inbound limiter counts packets rather than bytes, so it does not
-  /// throttle media proportionally.
-  bool get canEnablePublicWalkie => isPlus;
+  /// Staying online for public walkie is free.
+  bool get canEnablePublicWalkie => true;
 
-  /// Transmitting a public walkie clip.
+  /// Transmitting a public walkie clip is free.
   ///
-  /// Always Plus, with no session exemption: public walkie has no invitation and
-  /// no counterparty, so every transmit is one this device started, and it
-  /// reaches the whole mesh. Gating only the stay-online toggle would leave the
-  /// broadcast itself wide open.
-  bool get canBroadcastPublicWalkie => isPlus;
+  /// **Mesh health is not this gate's job any more, and must not become it
+  /// again.** These two were Plus, partly on the argument that an 8-hop flood
+  /// of a 96 KiB clip is the heaviest traffic AirGrid carries. That argument
+  /// was sound but the paywall was a poor instrument for it: it bounded *who*
+  /// could flood rather than *how much*, so it throttled nothing at all for
+  /// anyone who paid.
+  ///
+  /// The bound now lives where it can act on every device regardless of tier —
+  /// the airtime budget in `AirGridMeshService.sendPublicAudio`, charged in
+  /// seconds of audio (see `AirGridConstants.kPublicAudio*`). Restoring a tier
+  /// check here would not make the mesh safer; it would only make it quieter
+  /// for non-payers while leaving payers unbounded. Tune the budget instead.
+  ///
+  /// Free is also the point commercially: public walkie works with strangers
+  /// and needs no contact list, which makes it the one feature a lone user can
+  /// try the day they install. Private walkie and Rider Mode remain paid.
+  bool get canBroadcastPublicWalkie => true;
 
-  /// Receiving and relaying public walkie audio is always free. If free
-  /// devices stopped relaying `audio`, public walkie would break for exactly
-  /// the users paying for it.
+  /// Receiving and relaying public walkie audio is always free.
+  ///
+  /// This one protects private walkie and Rider Mode, which are still paid: a
+  /// paying user's audio reaches its counterparty by way of whatever devices
+  /// sit between them, and most of those are free. A relay gate would break
+  /// the paid features rather than the free one.
   bool get canRelayWalkieAudio => true;
 
   // ── Rider Mode ───────────────────────────────────────────────────────────

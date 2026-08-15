@@ -334,7 +334,13 @@ void main() {
 
       await _pumpPaywall(tester, billing: billing, store: upgraderStore());
 
-      expect(find.textContaining('Chat, voice notes, images'), findsOneWidget);
+      // Public walkie leads the free list: it is the largest thing this notice
+      // has to reassure an updating user about, and naming it is what stops
+      // the change reading as a feature being taken away.
+      expect(
+        find.textContaining('Public walkie, chat, voice notes, images'),
+        findsOneWidget,
+      );
       expect(
         find.textContaining('join a walkie session someone'),
         findsOneWidget,

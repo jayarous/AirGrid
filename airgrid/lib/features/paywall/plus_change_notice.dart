@@ -12,9 +12,9 @@ const String kPlusNoticeVersion = SubscriptionCatalog.plusNoticeVersion;
 /// Whether this device still owes the user an explanation of the change.
 ///
 /// There is no grandfathering, so someone updating from an older build finds
-/// walkie, public walkie and Rider Mode locked. An explanation is the
-/// difference between "the app changed and told me" and "the app took
-/// something away" — the second is where one-star reviews come from.
+/// private walkie and Rider Mode locked. An explanation is the difference
+/// between "the app changed and told me" and "the app took something away" —
+/// the second is where one-star reviews come from.
 ///
 /// **Deliberately not shown at launch.** It used to open a bottom sheet over
 /// the first screen, which meant every fresh install — people who never had
@@ -81,16 +81,16 @@ class PlusChangeBanner extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Starting a walkie session, public walkie and Rider Mode '
-                      'now need a subscription.',
+                      'Starting a private walkie session and Rider Mode now '
+                      'need a subscription.',
                       style: text.bodySmall,
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Chat, voice notes, images, location sharing and relaying '
-                      'stay free — and you can still join a walkie session '
-                      'someone else starts, and talk back for as long as it '
-                      'lasts.',
+                      'Public walkie, chat, voice notes, images, location '
+                      'sharing and relaying stay free — and you can still join '
+                      'a walkie session someone else starts, and talk back for '
+                      'as long as it lasts.',
                       style: text.bodySmall?.copyWith(
                         color: cs.onSurfaceVariant,
                       ),

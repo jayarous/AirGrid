@@ -270,26 +270,14 @@ class ChatController extends Notifier<ChatState> {
     final stored = await publicWalkieStore.getStayOnlineEnabled();
     if (_isDisposed) return;
 
-    // Re-check the gate on restore, don't just replay what was saved.
+    // Restore what was saved, with no gate to re-check.
     //
-    // Someone who had public walkie switched on before Plus existed carries a
-    // stored `true` across the update, and the toggle in `walkie_screen` only
-    // asks `ensurePlus` on the way *on* — so a setting restored already-on is
-    // never gated by anything and the feature stays free forever. The same
-    // applies to a subscription that lapses.
-    //
-    // The stored preference is left untouched: if they subscribe later, the
-    // switch they last chose comes back on its own.
-    final enabled = stored && _gates.canEnablePublicWalkie;
-    if (stored && !enabled) {
-      AirGridLogger.log(
-        LogCategory.billing,
-        'Public walkie stay-online not restored: Plus required',
-      );
-    }
-
+    // This used to re-test entitlement here, because the toggle only asks on
+    // the way *on*: a stored `true` restored already-on would never have been
+    // gated by anything. Public walkie is free now, so there is nothing left to
+    // re-check and nothing a lapse can take away.
     state = state.copyWith(
-      walkie: state.walkie.copyWith(publicStayOnline: enabled),
+      walkie: state.walkie.copyWith(publicStayOnline: stored),
     );
   }
 
@@ -1141,20 +1129,12 @@ class ChatController extends Notifier<ChatState> {
     }
   }
 
-  /// Broadcast a walkie-talkie voice clip on the public channel.
-  /// Broadcasts a public walkie clip to the whole mesh. **Plus only.**
+  /// Broadcasts a public walkie clip to the whole mesh. Free.
   ///
-  /// Gating the stay-online toggle alone was not enough: the push-to-talk button
-  /// in public mode reaches this directly, so the broadcast itself has to be
-  /// gated too.
+  /// Throws [StateError] when the mesh refuses the clip — the airtime budget is
+  /// the only thing that limits broadcast now, and its message is written for
+  /// the user, so callers should surface it rather than replace it.
   Future<void> sendPublicWalkieAudio(AudioAttachmentPayload audio) async {
-    if (!_gates.canBroadcastPublicWalkie) {
-      AirGridLogger.log(
-        LogCategory.billing,
-        'Public walkie broadcast blocked: Plus required',
-      );
-      throw StateError('AirGrid Plus is required to broadcast public walkie.');
-    }
     await _mesh.sendPublicAudio(audio);
   }
 
@@ -1719,22 +1699,12 @@ class ChatController extends Notifier<ChatState> {
     state = state.copyWith(privacyMode: mode);
   }
 
-  /// Toggles public walkie broadcasting. **Enabling is Plus only.**
+  /// Toggles public walkie broadcasting. Free in both directions.
   ///
-  /// Only enabling is gated. Turning it *off* always works — a lapsed subscriber
-  /// must never be stuck broadcasting with no way to stop.
-  ///
-  /// Receiving and relaying public walkie audio is unaffected and always free;
-  /// if free devices stopped relaying `audio`, public walkie would break for
-  /// exactly the people paying for it.
+  /// Receiving and relaying public walkie audio is likewise always free; if
+  /// free devices stopped relaying `audio`, public walkie would break for
+  /// exactly the people it works best for.
   Future<void> setPublicWalkieStayOnline(bool enabled) async {
-    if (enabled && !_gates.canEnablePublicWalkie) {
-      AirGridLogger.log(
-        LogCategory.billing,
-        'Public walkie enable blocked: Plus required',
-      );
-      return;
-    }
     await _publicWalkieStore.setStayOnlineEnabled(enabled);
     state = state.copyWith(
       walkie: state.walkie.copyWith(publicStayOnline: enabled),

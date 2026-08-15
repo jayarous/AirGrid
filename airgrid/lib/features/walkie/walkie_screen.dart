@@ -929,26 +929,8 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
 
       final controller = ref.read(chatControllerProvider.notifier);
       if (_isPublicMode) {
-        // Broadcasting reaches the whole mesh and has no counterparty, so it is
-        // always Plus — unlike a private clip inside a session someone else
-        // started, which is free.
-        if (!mounted) return;
-        if (!await ensurePlus(
-          context,
-          ref,
-          gate: (gates) => gates.canBroadcastPublicWalkie,
-        )) {
-          await _deleteRecordedFile(recordedPath);
-          // Reset sending state in case it was set earlier.
-          if (mounted) {
-            controller.setWalkieSending(isSending: false);
-            controller.setWalkieLastError(null);
-            setState(() {
-              _status = 'Cancelled';
-            });
-          }
-          return;
-        }
+        // Broadcasting is free. What bounds it is the mesh's airtime budget,
+        // which refuses below with a message naming the wait.
         if (!mounted) return;
         try {
           sendAttempted = true;
@@ -2710,17 +2692,6 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
                                   if (!stayOnlineEnabled) return;
                                   _triggerButtonFeedback();
                                   if (_isPublicMode) {
-                                    // Only switching it on is Plus; switching
-                                    // off must always work.
-                                    if (!stayOnlineOn &&
-                                        !await ensurePlus(
-                                          context,
-                                          ref,
-                                          gate: (gates) =>
-                                              gates.canEnablePublicWalkie,
-                                        )) {
-                                      return;
-                                    }
                                     if (!mounted) return;
                                     _setStatus(
                                       !stayOnlineOn

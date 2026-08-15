@@ -82,7 +82,12 @@ Monetise → Products → Subscriptions → Create subscription.
 |---|---|
 | **Product ID** | `airgrid_plus` |
 | Name | AirGrid Plus |
-| Description | Live voice on the mesh — start walkie sessions, public walkie, Rider Mode, and file sharing. Works with no internet. |
+| Description | Live voice on the mesh — start private walkie sessions, Rider Mode, and file sharing. Works with no internet. |
+
+> **Public walkie is free and must not be listed here.** It was part of this
+> description while it was a paid feature. Advertising a free feature as a
+> subscription benefit is both misleading and a Play policy risk. Changing this
+> file does not change the store: **edit the description in Play Console too.**
 
 **The product ID is permanent.** It cannot be renamed, and cannot be reused even
 after deletion. It must match `SubscriptionCatalog.productId` exactly.

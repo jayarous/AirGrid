@@ -55,20 +55,33 @@ clients drop fragments the mesh — and this codebase already knows that pain
 ## 3. Packaging — chat free, live voice paid
 
 **Free — "AirGrid"**
-Public mesh chat, private encrypted chat, images, **voice notes**, location
-sharing, safety numbers, recent history, and relaying / store-and-forward
-(always, including relaying `audio` packets for paying users).
+Public mesh chat, private encrypted chat, images, **voice notes**, **public
+walkie**, location sharing, safety numbers, recent history, and relaying /
+store-and-forward (always, including relaying `audio` packets for paying users).
 
 **Paid — "AirGrid Plus"**
 
 | Feature | Why it's a safe gate |
 |---|---|
 | **Starting a Private Walkie session** | The differentiated feature. Nothing else does offline PTT. |
-| **Public walkie mode** | Gating it *helps* mesh health — an 8-hop flood of a 96 KiB clip is the heaviest traffic the mesh carries, and the inbound limiter counts packets, not bytes. Commercially and technically aligned. |
 | **Rider Mode** | Purely local behaviour (continuous background + battery cost). |
 | Longer walkie clips | Sender-side bound. |
 | Arbitrary **file** attachments + higher size cap | Sender-side only; receivers already handle `file` packets. |
 | **Unlimited history + export** | Local retention only. |
+
+**Public walkie was originally on this list and is not any more.** The gate was
+justified partly on mesh health: an 8-hop flood of a 96 KiB clip is the heaviest
+traffic the mesh carries, and the limiters count packets, not bytes. That
+concern was real, but a paywall was the wrong instrument for it — it bounded
+*who* could flood rather than *how much*, and throttled nothing at all for
+anyone who paid.
+
+The bound now lives in `AirGridMeshService.sendPublicAudio` as an airtime budget
+charged in seconds of audio, applying to every device regardless of tier (see
+`AirGridConstants.kPublicAudio*`). Commercially, public walkie is the one live
+voice feature that works with strangers and needs no contact list, which makes
+it the strongest thing the free tier can offer a user on day one. Re-gating it
+would not make the mesh safer — tune the budget instead.
 
 ### 3.1 Walkie is a session, not a send — gate the initiator only
 
@@ -86,9 +99,11 @@ user experiences the whole feature, in their own hand, with a real person, and
 *then* wants to start one themselves. A live demo built into the product beats
 any paywall screen.
 
-Corollary: free devices must keep relaying `audio` packets mesh-wide. If the
-gate ever reaches relay eligibility, public walkie breaks for the people paying
-for it. The isolation test in §4 is what prevents this.
+Corollary: free devices must keep relaying `audio` packets mesh-wide. If a gate
+ever reaches relay eligibility, walkie audio breaks for everyone downstream of a
+free device — which, on a mesh, is most people. The isolation test in §4 is what
+should prevent this; **it has not been written yet**, so this currently rests on
+review discipline alone.
 
 ### 3.2 Voice notes should stay free
 
@@ -253,6 +268,9 @@ and a line in the privacy policy.
 `1.0.11+14` is live, and Rider Mode and public walkie already ship free.
 Retroactively paywalling features people already have earns exactly the reviews
 you'd expect.
+
+**Public walkie has since been returned to the free tier**, so of the two only
+Rider Mode is still taken away from an existing user on update.
 
 **Grandfather them.** On first launch of the billing-enabled build, if a
 pre-existing install is detected (identity already present in

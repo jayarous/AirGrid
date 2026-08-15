@@ -19,13 +19,13 @@ import 'package:url_launcher/url_launcher.dart';
 /// without paying — otherwise it reads as the app having been taken away.
 const _plusFeatures = <(IconData, String)>[
   (Icons.record_voice_over, 'Start private walkie sessions'),
-  (Icons.campaign_outlined, 'Public walkie — broadcast to everyone nearby'),
   (Icons.motorcycle_outlined, 'Rider Mode for continuous hands-free voice'),
   (Icons.attach_file, 'Send file attachments'),
   (Icons.download_outlined, 'Export your message history'),
 ];
 
 const _freeFeatures = <String>[
+  'Public walkie — broadcast to everyone nearby',
   'Public and private chat',
   'Voice notes and images',
   'Location sharing and safety numbers',
