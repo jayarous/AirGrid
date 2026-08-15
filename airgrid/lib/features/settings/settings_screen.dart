@@ -513,18 +513,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                       color: meshStatus.color,
                     ),
                     const SizedBox(width: 8),
+                    // Both halves of the toggle live here. Stopping the mesh
+                    // also disables the Available and Scanning switches below,
+                    // so without a start path this row strands the whole
+                    // section until you navigate back to Home.
                     IconButton(
-                      tooltip: 'Stop mesh now',
-                      onPressed: state.meshStarted && !state.isMeshStarting
-                          ? () {
-                              unawaited(
-                                ref
-                                    .read(chatControllerProvider.notifier)
-                                    .stopMesh(),
+                      tooltip: state.meshStarted
+                          ? 'Stop mesh now'
+                          : 'Start mesh',
+                      onPressed: state.isMeshStarting
+                          ? null
+                          : () {
+                              final controller = ref.read(
+                                chatControllerProvider.notifier,
                               );
-                            }
-                          : null,
-                      icon: const Icon(Icons.power_settings_new),
+                              unawaited(
+                                state.meshStarted
+                                    ? controller.stopMesh()
+                                    : controller.startMesh(),
+                              );
+                            },
+                      icon: Icon(
+                        state.meshStarted
+                            ? Icons.power_settings_new
+                            : Icons.play_arrow_rounded,
+                      ),
                     ),
                   ],
                 ),

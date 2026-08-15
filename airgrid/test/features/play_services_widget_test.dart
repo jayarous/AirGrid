@@ -319,6 +319,65 @@ void main() {
     expect(prefs.getDouble(nearbySmoothingAlphaPrefKey), greaterThan(0.18));
   });
 
+  testWidgets('Settings mesh button offers a live start when mesh is stopped', (
+    tester,
+  ) async {
+    await _pumpWithProviders(
+      tester,
+      const SettingsScreen(),
+      const PlayServicesStatus.available(),
+    );
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(SettingsScreen)),
+    );
+
+    // Settings does not auto-start the mesh the way Home and Chat do, so the
+    // row opens on the stopped half of the toggle.
+    expect(container.read(chatControllerProvider).meshStarted, isFalse);
+    expect(find.text('Offline'), findsOneWidget);
+
+    // The regression this guards: the button used to be a fixed 'Stop mesh
+    // now' that disabled itself once the mesh stopped. That left no way to
+    // start it again from Settings -- and since Available and Scanning are
+    // both gated on meshStarted, it stranded the whole Connection section
+    // until you navigated back to Home, which restarts the mesh on init.
+    final startTooltip = find.byTooltip('Start mesh');
+    expect(startTooltip, findsOneWidget);
+    final startButton = find.ancestor(
+      of: startTooltip,
+      matching: find.byType(IconButton),
+    );
+    expect(tester.widget<IconButton>(startButton).onPressed, isNotNull);
+
+    // pumpAndSettle would hang here: a started mesh holds a periodic prune
+    // timer, so settle never reaches a quiet frame. Pump explicitly instead,
+    // the way the ChatScreen mesh tests do.
+    await tester.tap(startTooltip);
+    await tester.pump();
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+
+    expect(container.read(chatControllerProvider).meshStarted, isTrue);
+    expect(container.read(chatControllerProvider).isMeshStarting, isFalse);
+    expect(find.byTooltip('Stop mesh now'), findsOneWidget);
+    expect(find.byTooltip('Start mesh'), findsNothing);
+
+    // ...and the stop half stays live, so the toggle is not one-way in the
+    // other direction either.
+    final stopButton = find.ancestor(
+      of: find.byTooltip('Stop mesh now'),
+      matching: find.byType(IconButton),
+    );
+    expect(tester.widget<IconButton>(stopButton).onPressed, isNotNull);
+
+    // Deliberately left running, the way the ChatScreen mesh tests do.
+    // Driving stopMesh() from a widget test hangs: teardown awaits
+    // _positionSub.cancel() on the geolocator position stream, which never
+    // completes without a mocked platform channel.
+  });
+
   testWidgets('Settings clear all chats dialog cancels without clearing', (
     tester,
   ) async {
