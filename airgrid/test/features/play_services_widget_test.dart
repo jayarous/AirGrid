@@ -232,13 +232,9 @@ void main() {
       const PlayServicesStatus.available(),
     );
 
-    expect(find.text('AirGrid battery saver'), findsOneWidget);
-    // Battery saver defaults OFF (ChatState.batteryOptimizationEnabled, set to
-    // false by RiderModeReady -- rider mode needs continuous background mesh
-    // activity). So the "Off:" note is what renders first, and toggling swaps
-    // it to the "On:" note. This assertion pair is the point of the test: the
-    // subtitle has to track the switch.
-    expect(find.textContaining('may continue scanning'), findsOneWidget);
+    // Mesh status sits in the Connection section, above the fold. Assert it
+    // first: the body is a lazy ListView, so a section scrolled out of view is
+    // unbuilt and its text stops matching.
     expect(find.text('Mesh status'), findsOneWidget);
     expect(find.widgetWithText(SwitchListTile, 'Available'), findsOneWidget);
     expect(find.text('Scanning'), findsOneWidget);
@@ -248,8 +244,22 @@ void main() {
       SwitchListTile,
       'AirGrid battery saver',
     );
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, -260));
+    await tester.scrollUntilVisible(
+      batterySaverSwitch,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pumpAndSettle();
+
+    expect(find.text('AirGrid battery saver'), findsOneWidget);
+    // Battery saver defaults OFF (ChatState.batteryOptimizationEnabled, set to
+    // false by RiderModeReady -- rider mode needs continuous background mesh
+    // activity). So the "Off:" note is what renders first, and toggling swaps
+    // it to the "On:" note. This assertion pair is the point of the test: the
+    // subtitle has to track the switch.
+    expect(find.textContaining('may continue scanning'), findsOneWidget);
+
+    await tester.ensureVisible(batterySaverSwitch);
     await tester.tap(batterySaverSwitch);
     await tester.pumpAndSettle();
 
@@ -298,6 +308,10 @@ void main() {
     expect(find.text('Heading smoothing'), findsOneWidget);
     expect(find.text('0.18'), findsOneWidget);
 
+    // The slider is built but sits below the fold, so a drag at its centre
+    // misses the hit test entirely and the value never changes.
+    await tester.ensureVisible(slider);
+    await tester.pumpAndSettle();
     await tester.drag(slider, const Offset(200, 0));
     await tester.pumpAndSettle();
 

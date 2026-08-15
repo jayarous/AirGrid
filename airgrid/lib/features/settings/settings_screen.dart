@@ -960,11 +960,12 @@ class _SettingsSection extends StatelessWidget {
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
           ),
         ),
-        Container(
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerLow,
+        Material(
+          color: cs.surfaceContainerLow,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: cs.outlineVariant.withAlpha(80)),
+            side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
           ),
           child: Column(children: children),
         ),
