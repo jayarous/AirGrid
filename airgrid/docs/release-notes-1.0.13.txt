@@ -1,0 +1,6 @@
+AirGrid 1.0.13
+
+What's new:
+- Public Walkie is now free. Broadcasting to everyone nearby no longer uses your balance.
+- Settings rows respond to your taps again, so you can see what you have pressed.
+- You can restart the mesh from Settings after stopping it, without going back to the home screen.
