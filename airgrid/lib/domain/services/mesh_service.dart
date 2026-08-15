@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:airgrid/core/constants.dart';
@@ -211,6 +212,13 @@ class AirGridMeshService {
   /// Outbound user message rate limiter (local sender).
   late final RateLimiter _outboundLimiter;
 
+  /// Public walkie airtime budget (local sender), charged in seconds of audio.
+  ///
+  /// Separate from [_outboundLimiter] because that one counts packets: a clip
+  /// and a one-line chat message cost it the same token. See the
+  /// `kPublicAudio*` constants for why broadcast needs its own budget.
+  late final RateLimiter _publicAudioLimiter;
+
   /// Per-peer inbound packet rate limiters (keyed by endpoint ID).
   late final PerPeerRateLimiterMap _inboundLimiters;
 
@@ -251,6 +259,11 @@ class AirGridMeshService {
     _outboundLimiter = RateLimiter(
       burstCapacity: AirGridConstants.kOutboundMessageBurst,
       tokensPerSecond: AirGridConstants.kOutboundMessageRatePerSec,
+      clock: clock,
+    );
+    _publicAudioLimiter = RateLimiter(
+      burstCapacity: AirGridConstants.kPublicAudioAirtimeBurst,
+      tokensPerSecond: AirGridConstants.kPublicAudioAirtimeRefillPerSec,
       clock: clock,
     );
     _inboundLimiters = PerPeerRateLimiterMap(
@@ -523,6 +536,30 @@ class AirGridMeshService {
     if (!_outboundLimiter.allow()) {
       throw StateError(
         'Audio rate limited. Please wait before transmitting again.',
+      );
+    }
+
+    // Charge the airtime budget by the length of this clip. Falling back to
+    // the maximum when [durationMs] is absent is deliberate: it fails closed,
+    // avoids inferring a duration from a byte count whose bitrate we do not
+    // control, and denies any caller a discount for omitting the field.
+    final seconds =
+        (audio.durationMs ?? AirGridConstants.kWalkieMaxDuration.inMilliseconds) /
+        1000.0;
+    final airtimeCost = math.max(
+      seconds,
+      AirGridConstants.kPublicAudioMinChargeSeconds,
+    );
+    if (!_publicAudioLimiter.allow(cost: airtimeCost)) {
+      final retryAfter = _publicAudioLimiter.retryAfter(cost: airtimeCost);
+      AirGridLogger.log(
+        LogCategory.routing,
+        'Public audio airtime limited '
+        '(cost ${airtimeCost}s, retry after ${retryAfter.inMilliseconds}ms)',
+      );
+      throw StateError(
+        'Too much airtime. You can broadcast again in '
+        '${retryAfter.inSeconds + 1}s.',
       );
     }
 

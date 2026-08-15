@@ -146,4 +146,43 @@ class AirGridConstants {
 
   /// Idle duration after which a per-peer rate limiter may be evicted.
   static const Duration kRateLimiterIdleEviction = Duration(minutes: 5);
+
+  // ── Public walkie airtime budget ─────────────────────────────────────────
+  //
+  // Public broadcast gets its own limiter, charged in *seconds of audio*
+  // rather than in packets.
+  //
+  // [kOutboundMessageRatePerSec] cannot do this job. It counts packets, so a
+  // 96 KiB walkie clip and a 20-byte chat message each cost one token — at 5
+  // per second with a [kWalkieMinDuration] floor of 350 ms, it permits roughly
+  // 300 KiB/s of 8-hop flood. It is a brake on message *frequency*, never on
+  // airtime. Do not delete this budget as redundant with it.
+  //
+  // Public walkie is free, so the paywall no longer limits who can broadcast.
+  // These three numbers are the only thing standing between one device and the
+  // heaviest traffic the mesh carries.
+
+  /// Seconds of audio a device may broadcast back-to-back from idle.
+  ///
+  /// One maximum-length clip, or roughly six three-second clips.
+  static const int kPublicAudioAirtimeBurst = 20;
+
+  /// Seconds of broadcast airtime earned per second of real time.
+  ///
+  /// A sustained duty cycle of ~20%: a device may hold about a fifth of the
+  /// public channel indefinitely. Refills an empty budget in 100 seconds.
+  ///
+  /// This is the knob most likely to need tuning once real meshes are
+  /// observed. Lowering it is a one-line patch; 0.15 is the conservative
+  /// alternative and still allows four three-second clips from idle.
+  static const double kPublicAudioAirtimeRefillPerSec = 0.2;
+
+  /// Minimum airtime charged for any single clip, however short.
+  ///
+  /// Flood cost is per *clip*, not per second: every broadcast is a fresh
+  /// fragment set relayed across [kHopLimit] hops by every peer, plus a dedup
+  /// cache entry on each node it reaches. Without a floor, a burst of 350 ms
+  /// clips costs almost nothing in airtime while being one of the most
+  /// expensive things a device can do to the mesh.
+  static const double kPublicAudioMinChargeSeconds = 2.0;
 }

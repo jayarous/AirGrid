@@ -35,30 +35,49 @@ class RateLimiter {
   /// Returns the last time tokens were refilled or consumed.
   DateTime get lastActivity => _lastRefill;
 
-  /// Attempt to consume one token.
+  /// Attempt to consume [cost] tokens.
   ///
-  /// Returns true if a token was available and consumed; false if rate limited.
-  bool allow() {
+  /// Returns true if enough tokens were available and consumed; false if rate
+  /// limited. [cost] defaults to one token, so callers that treat every request
+  /// as equal need not pass it.
+  ///
+  /// A variable cost lets a caller charge by the *weight* of what it is
+  /// sending rather than by the number of requests. Public walkie uses this to
+  /// charge clips by their duration — see `AirGridConstants.kPublicAudio*`.
+  bool allow({double cost = 1.0}) {
+    final charge = _clampCost(cost);
     _refill();
-    if (_tokens >= 1.0) {
-      _tokens -= 1.0;
+    if (_tokens >= charge) {
+      _tokens -= charge;
       return true;
     }
     return false;
   }
 
-  /// Returns the duration to wait before the next token becomes available.
+  /// Returns the duration to wait before [cost] tokens become available.
   ///
-  /// Returns [Duration.zero] if tokens are currently available.
-  Duration retryAfter() {
+  /// Returns [Duration.zero] if enough tokens are already available.
+  Duration retryAfter({double cost = 1.0}) {
+    final charge = _clampCost(cost);
     _refill();
-    if (_tokens >= 1.0) {
+    if (_tokens >= charge) {
       return Duration.zero;
     }
-    final tokensNeeded = 1.0 - _tokens;
+    final tokensNeeded = charge - _tokens;
     final secondsNeeded = tokensNeeded / tokensPerSecond;
     return Duration(milliseconds: (secondsNeeded * 1000).ceil());
   }
+
+  /// Caps a cost at [burstCapacity].
+  ///
+  /// A cost larger than the bucket could never be satisfied no matter how long
+  /// the caller waited, and [retryAfter] would answer with a finite duration
+  /// that never comes true. Clamping keeps an oversized request merely
+  /// expensive rather than impossible. Nothing hits this today, but it means a
+  /// later increase to a caller's maximum unit size degrades gracefully instead
+  /// of silently wedging that caller forever.
+  double _clampCost(double cost) =>
+      cost.clamp(0.0, burstCapacity.toDouble()).toDouble();
 
   /// Refill tokens based on elapsed time since last refill.
   void _refill() {

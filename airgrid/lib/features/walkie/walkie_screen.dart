@@ -954,6 +954,16 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
           sendAttempted = true;
           await controller.sendPublicWalkieAudio(payload);
         } on StateError catch (e) {
+          // Clean up here rather than leaving it to the outer handler.
+          // `sendAttempted` is already true, and that flag means "the message
+          // pipeline may now own this file" — true once a message exists, but
+          // a refusal throws before one is ever created, so nothing owns it
+          // and the outer handler would skip the delete.
+          //
+          // This path is no longer rare: the airtime budget refuses routinely
+          // by design, so a leak here would accumulate a recording per
+          // rate-limited press.
+          await _deleteRecordedFile(recordedPath);
           throw _WalkieSendException(e.message);
         }
         if (!mounted) return;

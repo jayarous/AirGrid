@@ -127,6 +127,124 @@ void main() {
     });
   });
 
+  group('RateLimiter variable cost', () {
+    test('an unpriced call still costs exactly one token', () {
+      // The whole point of the default: every pre-existing caller keeps its
+      // old behaviour without passing anything.
+      final limiter = RateLimiter(burstCapacity: 3, tokensPerSecond: 1.0);
+
+      expect(limiter.allow(), true);
+      expect(limiter.allow(cost: 1.0), true);
+      expect(limiter.allow(), true);
+      expect(limiter.allow(), false);
+    });
+
+    test('a heavier call consumes proportionally more', () {
+      final limiter = RateLimiter(burstCapacity: 20, tokensPerSecond: 1.0);
+
+      expect(limiter.allow(cost: 15.0), true);
+      // 5 left: enough for a small charge, not for another large one.
+      expect(limiter.allow(cost: 15.0), false);
+      expect(limiter.allow(cost: 5.0), true);
+      expect(limiter.allow(cost: 0.5), false);
+    });
+
+    test('a refused call consumes nothing', () {
+      // Otherwise a rejected request would still drain the bucket and a caller
+      // retrying politely would push its own recovery further away.
+      final limiter = RateLimiter(burstCapacity: 10, tokensPerSecond: 1.0);
+
+      expect(limiter.allow(cost: 8.0), true);
+      expect(limiter.allow(cost: 5.0), false);
+      expect(limiter.allow(cost: 5.0), false);
+      // The 2 remaining tokens survived both refusals.
+      expect(limiter.allow(cost: 2.0), true);
+    });
+
+    test('fractional costs accumulate', () {
+      // Frozen clock: this measures a nearly-empty bucket, and under a real
+      // clock the microseconds between calls refill enough to blur it.
+      //
+      // Deliberately not asserted on an exact boundary. Token maths is
+      // floating point, so a bucket charged 0.35 twice holds 1.2999999999999998
+      // and would refuse a cost of exactly 1.3. That is invisible in practice —
+      // the smallest real charge is a whole second of airtime — but it means
+      // "spend the balance to precisely zero" is not a promise this class makes.
+      final now = DateTime(2026, 5, 27, 10, 0, 0);
+      final limiter = RateLimiter(
+        burstCapacity: 2,
+        tokensPerSecond: 1.0,
+        clock: () => now,
+      );
+
+      expect(limiter.allow(cost: 0.35), true);
+      expect(limiter.allow(cost: 0.35), true);
+      expect(limiter.allow(cost: 1.25), true);
+      // ~0.05 left: the three fractional charges really did add up.
+      expect(limiter.allow(cost: 0.1), false);
+    });
+
+    test('refills enough for a heavy call, in proportion to the wait', () {
+      var now = DateTime(2026, 5, 27, 10, 0, 0);
+      final limiter = RateLimiter(
+        burstCapacity: 20,
+        tokensPerSecond: 0.2, // the public-walkie airtime rate
+        clock: () => now,
+      );
+
+      expect(limiter.allow(cost: 20.0), true);
+      expect(limiter.allow(cost: 3.0), false);
+
+      // 0.2/s for 10s = 2 tokens: still short of a 3s clip.
+      now = now.add(const Duration(seconds: 10));
+      expect(limiter.allow(cost: 3.0), false);
+
+      // 5s more = 3 tokens total.
+      now = now.add(const Duration(seconds: 5));
+      expect(limiter.allow(cost: 3.0), true);
+    });
+
+    test('retryAfter answers for the cost being asked about', () {
+      var now = DateTime(2026, 5, 27, 10, 0, 0);
+      final limiter = RateLimiter(
+        burstCapacity: 20,
+        tokensPerSecond: 1.0,
+        clock: () => now,
+      );
+
+      expect(limiter.allow(cost: 20.0), true);
+
+      // A cheap call waits 2s; an expensive one waits 10s. Asking without a
+      // cost would understate both.
+      expect(limiter.retryAfter(cost: 2.0), const Duration(seconds: 2));
+      expect(limiter.retryAfter(cost: 10.0), const Duration(seconds: 10));
+
+      now = now.add(const Duration(seconds: 2));
+      expect(limiter.retryAfter(cost: 2.0), Duration.zero);
+      expect(limiter.retryAfter(cost: 10.0), const Duration(seconds: 8));
+    });
+
+    test('a cost above burst capacity is clamped, never impossible', () {
+      // Nothing charges more than the bucket holds today. If a caller's
+      // maximum unit size is ever raised past it, that caller must slow down —
+      // not wedge forever behind a retryAfter that never arrives.
+      var now = DateTime(2026, 5, 27, 10, 0, 0);
+      final limiter = RateLimiter(
+        burstCapacity: 5,
+        tokensPerSecond: 1.0,
+        clock: () => now,
+      );
+
+      expect(limiter.allow(cost: 100.0), true, reason: 'clamped to 5');
+      expect(limiter.allow(cost: 1.0), false);
+
+      // And the wait it quotes is real: 5 tokens at 1/s.
+      expect(limiter.retryAfter(cost: 100.0), const Duration(seconds: 5));
+      now = now.add(const Duration(seconds: 5));
+      expect(limiter.allow(cost: 100.0), true);
+    });
+  });
+
   group('PerPeerRateLimiterMap', () {
     test('creates limiter per peer on demand', () {
       final map = PerPeerRateLimiterMap(
