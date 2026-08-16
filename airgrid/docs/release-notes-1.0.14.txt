@@ -1,0 +1,4 @@
+AirGrid 1.0.14
+
+What's new:
+- Smaller download. AirGrid now ships without unused files, so it takes up a little less space on your phone. Nothing about how the app works has changed.
