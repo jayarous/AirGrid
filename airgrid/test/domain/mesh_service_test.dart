@@ -516,7 +516,7 @@ void main() {
         final packet = TransportCodec.decode(sent.bytes)!;
         expect(packet.conversationType, 'private');
         expect(packet.recipientNodeId, 'peer-encrypted');
-        expect(packet.encryptionVersion, 1);
+        expect(packet.encryptionVersion, CryptoService.kEncryptionVersion);
         expect(packet.content, isNot('Secret hello'));
       },
     );
@@ -977,7 +977,7 @@ void main() {
           sentReceipts.single.payload.endpoints,
           containsAll(['ep-relay', 'ep-other']),
         );
-        expect(receipt.encryptionVersion, 1);
+        expect(receipt.encryptionVersion, CryptoService.kEncryptionVersion);
         expect(receipt.senderPublicKey, identity.publicKeyBase64);
         expect(receipt.receiptMessageId, isNull);
         expect(receipt.content, isNotEmpty);
@@ -985,6 +985,7 @@ void main() {
         final decrypted = await keys.remote.decryptContent(
           receipt.content,
           receipt.senderPublicKey!,
+          aad: CryptoService.associatedDataFor(receipt),
         );
         expect(decrypted, inbound.messageId);
       },
@@ -1011,12 +1012,13 @@ void main() {
         expect(sent.endpoints, ['ep-remote']);
         final receipt = TransportCodec.decode(sent.bytes)!;
         expect(receipt.packetType, 'read_receipt');
-        expect(receipt.encryptionVersion, 1);
+        expect(receipt.encryptionVersion, CryptoService.kEncryptionVersion);
         expect(receipt.receiptMessageId, isNull);
 
         final decrypted = await keys.remote.decryptContent(
           receipt.content,
           receipt.senderPublicKey!,
+          aad: CryptoService.associatedDataFor(receipt),
         );
         expect(decrypted, 'read-msg-001');
       },

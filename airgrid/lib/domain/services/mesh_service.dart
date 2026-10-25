@@ -116,6 +116,14 @@ class PacketTooLargeException implements Exception {
 /// - rebroadcast decisions (excluding the source endpoint)
 ///
 /// Depends ONLY on [TransportService] - no direct Nearby Connections imports.
+/// A packet header fixed before encryption so the ciphertext can be bound to
+/// it; see [CryptoService.associatedData].
+typedef _PacketHeader = ({String messageId, int timestamp});
+
+/// Outcome of decrypting an inbound private packet. [dropped] means the
+/// packet must not be shown, acknowledged or relayed.
+typedef _InboundDecrypt = ({String? plaintext, bool dropped});
+
 class AirGridMeshService {
   final TransportService _transport;
   final LocalIdentityStore _identity;
@@ -144,6 +152,13 @@ class AirGridMeshService {
   final _fragmentCache = LruCache<String>(
     maxSize: 5000,
     ttl: const Duration(minutes: 5),
+  );
+
+  /// Key mismatches already surfaced on [keyChangeStream], keyed on
+  /// "nodeId:carriedKey", so a stream of forged packets warns once per key.
+  final _reportedKeyMismatches = LruCache<String>(
+    maxSize: 1000,
+    ttl: AirGridConstants.kCacheTtl,
   );
 
   /// Reassembly buffer: accumulates incoming fragment packets until all
@@ -296,6 +311,7 @@ class AirGridMeshService {
     _privateReceiptController = PrivateReceiptController(
       identity: _identity,
       cryptoService: _cryptoService,
+      pinnedKeyLookup: _pinnedKeyFor,
       lookupDirectEndpoint: (recipientNodeId) => _endpointToNodeId.entries
           .where((e) => e.value == recipientNodeId)
           .map((e) => e.key)
@@ -544,7 +560,8 @@ class AirGridMeshService {
     // avoids inferring a duration from a byte count whose bitrate we do not
     // control, and denies any caller a discount for omitting the field.
     final seconds =
-        (audio.durationMs ?? AirGridConstants.kWalkieMaxDuration.inMilliseconds) /
+        (audio.durationMs ??
+            AirGridConstants.kWalkieMaxDuration.inMilliseconds) /
         1000.0;
     final airtimeCost = math.max(
       seconds,
@@ -620,26 +637,23 @@ class AirGridMeshService {
       return false;
     }
 
-    final encrypted = await _cryptoService.encryptContent(
+    final header = _newHeader();
+    final enc = await _encryptFor(
       control.toWire(),
       recipientNodeId,
-    );
-    if (encrypted == null) return false;
-
-    final localNodeId = _identity.nodeId;
-    final packet = AirGridPacket(
-      messageId: const Uuid().v4(),
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: encrypted,
-      seenByNodes: [localNodeId],
-      hopLimit: 1,
+      header: header,
       packetType: 'rider_control',
-      senderPublicKey: _identity.publicKeyBase64,
-      encryptionVersion: 1,
-      conversationType: 'private',
+    );
+    if (!enc.encrypted) return false;
+
+    final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: recipientNodeId,
+      wireContent: enc.wire,
+      encrypted: true,
+      encryptionVersion: enc.version,
+      packetType: 'rider_control',
+      hopLimit: 1,
     );
 
     try {
@@ -670,26 +684,23 @@ class AirGridMeshService {
       return false;
     }
 
-    final encrypted = await _cryptoService.encryptContent(
+    final header = _newHeader();
+    final enc = await _encryptFor(
       RiderKeepalivePayload(sessionId: sessionId).toWire(),
       recipientNodeId,
-    );
-    if (encrypted == null) return false;
-
-    final localNodeId = _identity.nodeId;
-    final packet = AirGridPacket(
-      messageId: const Uuid().v4(),
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: encrypted,
-      seenByNodes: [localNodeId],
-      hopLimit: 1,
+      header: header,
       packetType: 'rider_control',
-      senderPublicKey: _identity.publicKeyBase64,
-      encryptionVersion: 1,
-      conversationType: 'private',
+    );
+    if (!enc.encrypted) return false;
+
+    final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: recipientNodeId,
+      wireContent: enc.wire,
+      encrypted: true,
+      encryptionVersion: enc.version,
+      packetType: 'rider_control',
+      hopLimit: 1,
     );
 
     try {
@@ -715,26 +726,23 @@ class AirGridMeshService {
       return false;
     }
 
-    final encrypted = await _cryptoService.encryptContent(
+    final header = _newHeader();
+    final enc = await _encryptFor(
       frame.toWire(),
       recipientNodeId,
-    );
-    if (encrypted == null) return false;
-
-    final localNodeId = _identity.nodeId;
-    final packet = AirGridPacket(
-      messageId: const Uuid().v4(),
-      senderNodeId: localNodeId,
-      senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      content: encrypted,
-      seenByNodes: [localNodeId],
-      hopLimit: 1,
+      header: header,
       packetType: 'rider_audio_frame',
-      senderPublicKey: _identity.publicKeyBase64,
-      encryptionVersion: 1,
-      conversationType: 'private',
+    );
+    if (!enc.encrypted) return false;
+
+    final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: recipientNodeId,
+      wireContent: enc.wire,
+      encrypted: true,
+      encryptionVersion: enc.version,
+      packetType: 'rider_audio_frame',
+      hopLimit: 1,
     );
 
     try {
@@ -796,47 +804,168 @@ class AirGridMeshService {
     return null;
   }
 
-  /// Encrypts [plain] for [recipientNodeId] when their key is known.
+  /// A fresh packet header, fixed before encryption so the ciphertext can be
+  /// bound to it. [packetId] reuses an id the caller has already committed
+  /// to, such as a resend's local bubble id.
+  _PacketHeader _newHeader([String? packetId]) => (
+    messageId: packetId ?? const Uuid().v4(),
+    timestamp: DateTime.now().millisecondsSinceEpoch,
+  );
+
+  /// Encrypts [plain] for [recipientNodeId] when their key is known, bound to
+  /// the [header] and [packetType] it is about to be sent under.
   ///
   /// Falls back to plaintext — the caller decides whether that is acceptable.
   Future<({String wire, bool encrypted, int? version})> _encryptFor(
     String plain,
-    String recipientNodeId,
-  ) async {
+    String recipientNodeId, {
+    required _PacketHeader header,
+    required String packetType,
+  }) async {
     if (_cryptoService.hasKey(recipientNodeId)) {
       final cipher = await _cryptoService.encryptContent(
         plain,
         recipientNodeId,
+        aad: CryptoService.associatedData(
+          messageId: header.messageId,
+          senderNodeId: _identity.nodeId,
+          recipientNodeId: recipientNodeId,
+          packetType: packetType,
+          timestamp: header.timestamp,
+        ),
       );
       if (cipher != null) {
-        return (wire: cipher, encrypted: true, version: 1);
+        return (
+          wire: cipher,
+          encrypted: true,
+          version: CryptoService.kEncryptionVersion,
+        );
       }
     }
     return (wire: plain, encrypted: false, version: null);
   }
 
-  /// Builds a private packet. Payload-specific fields are the caller's job.
+  /// Builds a private packet under [header]. Payload-specific fields are the
+  /// caller's job; [header] and [packetType] must be the ones the content was
+  /// encrypted for.
   AirGridPacket _buildPrivatePacket({
+    required _PacketHeader header,
     required String recipientNodeId,
     required String wireContent,
     required bool encrypted,
     required int? encryptionVersion,
     String packetType = 'chat',
-    String? packetId,
+    int hopLimit = AirGridConstants.kHopLimit,
   }) => AirGridPacket(
-    messageId: packetId ?? const Uuid().v4(),
+    messageId: header.messageId,
     senderNodeId: _identity.nodeId,
     senderName: _identity.displayName ?? 'Unknown',
-    timestamp: DateTime.now().millisecondsSinceEpoch,
+    timestamp: header.timestamp,
     content: wireContent,
     seenByNodes: [_identity.nodeId],
-    hopLimit: AirGridConstants.kHopLimit,
+    hopLimit: hopLimit,
     packetType: packetType,
     senderPublicKey: encrypted ? _identity.publicKeyBase64 : null,
     encryptionVersion: encryptionVersion,
     conversationType: 'private',
     recipientNodeId: recipientNodeId,
   );
+
+  // ── Inbound key binding ──────────────────────────────────────────────────
+
+  /// The key pinned for [nodeId]: the in-memory cache first, else the key
+  /// persisted with the known contact, which is cached on the way out.
+  String? _pinnedKeyFor(String nodeId) {
+    final cached = _cryptoService.pinnedKeyBase64(nodeId);
+    if (cached != null) return cached;
+    final contact = _contactStore.contacts.cast<KnownContact?>().firstWhere(
+      (c) => c?.nodeId == nodeId,
+      orElse: () => null,
+    );
+    final stored = contact?.publicKeyBase64;
+    if (stored == null || stored.isEmpty) return null;
+    _cryptoService.cacheKey(nodeId, stored);
+    return _cryptoService.pinnedKeyBase64(nodeId);
+  }
+
+  /// The key an inbound encrypted packet must be decrypted with.
+  ///
+  /// A packet's own `senderPublicKey` proves that someone holds that key,
+  /// not that they are the node id on the header. So the pinned key wins:
+  /// when one exists and the packet carries a different one, the packet is
+  /// refused and the mismatch is surfaced on [keyChangeStream] for the user
+  /// to judge, exactly as a changed key_announce would be. The pinned key is
+  /// never replaced from here; only key-announce handling may do that.
+  ///
+  /// With nothing pinned yet this is trust-on-first-use, the same contract
+  /// key_announce offers.
+  ///
+  /// Returns null when the packet must be dropped.
+  String? _senderKeyFor(AirGridPacket packet) {
+    final carried = packet.senderPublicKey;
+    final pinned = _pinnedKeyFor(packet.senderNodeId);
+    if (pinned == null) {
+      if (carried == null) return null;
+      return _cryptoService.pinKeyIfAbsent(packet.senderNodeId, carried)
+          ? carried
+          : null;
+    }
+    if (carried != null && carried != pinned) {
+      _reportKeyMismatch(packet, pinned: pinned, carried: carried);
+      return null;
+    }
+    return pinned;
+  }
+
+  void _reportKeyMismatch(
+    AirGridPacket packet, {
+    required String pinned,
+    required String carried,
+  }) {
+    AirGridLogger.log(
+      LogCategory.crypto,
+      'Dropped ${packet.messageId}: ${packet.packetType} claiming to be from '
+      '${packet.senderNodeId} carries a key that does not match the pinned '
+      'one',
+    );
+    final reportKey = '${packet.senderNodeId}:$carried';
+    if (_reportedKeyMismatches.contains(reportKey)) return;
+    _reportedKeyMismatches.add(reportKey);
+    _keyChangeController.add((
+      nodeId: packet.senderNodeId,
+      displayName: packet.senderName,
+      previousPublicKeyBase64: pinned,
+      newPublicKeyBase64: carried,
+    ));
+  }
+
+  /// Decrypts an inbound private packet addressed to this node.
+  ///
+  /// A failed MAC on a [CryptoService.kEncryptionVersion] packet is reported
+  /// as dropped rather than undecryptable: the sender held our key and bound
+  /// the header, so a mismatch means the ciphertext was replayed or the
+  /// header rewritten, and neither deserves a bubble or a receipt. Legacy
+  /// version-1 packets keep the undecryptable placeholder, since a stale key
+  /// on either side is the likeliest cause there.
+  Future<_InboundDecrypt> _decryptInbound(AirGridPacket packet) async {
+    final key = _senderKeyFor(packet);
+    if (key == null) return (plaintext: null, dropped: true);
+    final plaintext = await _cryptoService.decryptContent(
+      packet.content,
+      key,
+      aad: CryptoService.associatedDataFor(packet),
+    );
+    if (plaintext == null &&
+        packet.encryptionVersion == CryptoService.kEncryptionVersion) {
+      AirGridLogger.log(
+        LogCategory.crypto,
+        'Dropped ${packet.messageId}: ${packet.packetType} from '
+        '${packet.senderNodeId} failed authentication under its own header',
+      );
+      return (plaintext: null, dropped: true);
+    }
+    return (plaintext: plaintext, dropped: false);
+  }
 
   void _emitStatus(String messageId, DeliveryStatus status) =>
       _statusController.add((messageId: messageId, status: status));
@@ -978,12 +1107,19 @@ class AirGridMeshService {
     final refusal = _privateSendPrecheck(recipientNodeId);
     if (refusal != null) return refusal;
 
-    final enc = await _encryptFor(validatedContent, recipientNodeId);
+    final header = _newHeader();
+    final enc = await _encryptFor(
+      validatedContent,
+      recipientNodeId,
+      header: header,
+      packetType: 'chat',
+    );
     if (!enc.encrypted && !allowPlaintextFallback) {
       return PrivateSendResult.needsPlaintextConfirmation;
     }
 
     final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: recipientNodeId,
       wireContent: enc.wire,
       encrypted: enc.encrypted,
@@ -1112,21 +1248,23 @@ class AirGridMeshService {
     if (refusal != null) return refusal;
 
     // Re-cache the key in case the in-memory crypto service was cleared.
-    if (!_cryptoService.hasKey(contact.nodeId)) {
-      _cryptoService.cacheKey(contact.nodeId, contact.publicKeyBase64);
-    }
+    _cryptoService.pinKeyIfAbsent(contact.nodeId, contact.publicKeyBase64);
 
-    final cipher = await _cryptoService.encryptContent(
+    final header = _newHeader();
+    final enc = await _encryptFor(
       validatedContent,
       contact.nodeId,
+      header: header,
+      packetType: 'chat',
     );
-    if (cipher == null) return PrivateSendResult.peerUnavailable;
+    if (!enc.encrypted) return PrivateSendResult.peerUnavailable;
 
     final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: contact.nodeId,
-      wireContent: cipher,
+      wireContent: enc.wire,
       encrypted: true,
-      encryptionVersion: 1,
+      encryptionVersion: enc.version,
     );
 
     _messageCache.add(packet.messageId);
@@ -1165,18 +1303,24 @@ class AirGridMeshService {
     final refusal = _privateSendPrecheck(recipientNodeId);
     if (refusal != null) return refusal;
 
-    final enc = await _encryptFor(image.toWire(), recipientNodeId);
+    final header = _newHeader(packetId ?? messageId);
+    final enc = await _encryptFor(
+      image.toWire(),
+      recipientNodeId,
+      header: header,
+      packetType: 'image',
+    );
     if (!enc.encrypted && !allowPlaintextFallback) {
       return PrivateSendResult.needsPlaintextConfirmation;
     }
 
     final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: recipientNodeId,
       wireContent: enc.wire,
       encrypted: enc.encrypted,
       encryptionVersion: enc.version,
       packetType: 'image',
-      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
@@ -1225,23 +1369,24 @@ class AirGridMeshService {
     if (refusal != null) return refusal;
 
     // Re-cache the key in case the in-memory crypto service was cleared.
-    if (!_cryptoService.hasKey(contact.nodeId)) {
-      _cryptoService.cacheKey(contact.nodeId, contact.publicKeyBase64);
-    }
+    _cryptoService.pinKeyIfAbsent(contact.nodeId, contact.publicKeyBase64);
 
-    final cipher = await _cryptoService.encryptContent(
+    final header = _newHeader(packetId ?? messageId);
+    final enc = await _encryptFor(
       image.toWire(),
       contact.nodeId,
+      header: header,
+      packetType: 'image',
     );
-    if (cipher == null) return PrivateSendResult.peerUnavailable;
+    if (!enc.encrypted) return PrivateSendResult.peerUnavailable;
 
     final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: contact.nodeId,
-      wireContent: cipher,
+      wireContent: enc.wire,
       encrypted: true,
-      encryptionVersion: 1,
+      encryptionVersion: enc.version,
       packetType: 'image',
-      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
@@ -1291,18 +1436,24 @@ class AirGridMeshService {
     final refusal = _privateSendPrecheck(recipientNodeId);
     if (refusal != null) return refusal;
 
-    final enc = await _encryptFor(audio.toWire(), recipientNodeId);
+    final header = _newHeader(packetId ?? messageId);
+    final enc = await _encryptFor(
+      audio.toWire(),
+      recipientNodeId,
+      header: header,
+      packetType: 'audio',
+    );
     if (!enc.encrypted && !allowPlaintextFallback) {
       return PrivateSendResult.needsPlaintextConfirmation;
     }
 
     final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: recipientNodeId,
       wireContent: enc.wire,
       encrypted: enc.encrypted,
       encryptionVersion: enc.version,
       packetType: 'audio',
-      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
@@ -1352,23 +1503,24 @@ class AirGridMeshService {
     if (refusal != null) return refusal;
 
     // Re-cache the key in case the in-memory crypto service was cleared.
-    if (!_cryptoService.hasKey(contact.nodeId)) {
-      _cryptoService.cacheKey(contact.nodeId, contact.publicKeyBase64);
-    }
+    _cryptoService.pinKeyIfAbsent(contact.nodeId, contact.publicKeyBase64);
 
-    final cipher = await _cryptoService.encryptContent(
+    final header = _newHeader(packetId ?? messageId);
+    final enc = await _encryptFor(
       audio.toWire(),
       contact.nodeId,
+      header: header,
+      packetType: 'audio',
     );
-    if (cipher == null) return PrivateSendResult.peerUnavailable;
+    if (!enc.encrypted) return PrivateSendResult.peerUnavailable;
 
     final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: contact.nodeId,
-      wireContent: cipher,
+      wireContent: enc.wire,
       encrypted: true,
-      encryptionVersion: 1,
+      encryptionVersion: enc.version,
       packetType: 'audio',
-      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
@@ -1419,18 +1571,24 @@ class AirGridMeshService {
     final refusal = _privateSendPrecheck(recipientNodeId);
     if (refusal != null) return refusal;
 
-    final enc = await _encryptFor(file.toWire(), recipientNodeId);
+    final header = _newHeader(packetId ?? messageId);
+    final enc = await _encryptFor(
+      file.toWire(),
+      recipientNodeId,
+      header: header,
+      packetType: 'file',
+    );
     if (!enc.encrypted && !allowPlaintextFallback) {
       return PrivateSendResult.needsPlaintextConfirmation;
     }
 
     final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: recipientNodeId,
       wireContent: enc.wire,
       encrypted: enc.encrypted,
       encryptionVersion: enc.version,
       packetType: 'file',
-      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
@@ -1477,23 +1635,24 @@ class AirGridMeshService {
     if (refusal != null) return refusal;
 
     // Re-cache the key in case the in-memory crypto service was cleared.
-    if (!_cryptoService.hasKey(contact.nodeId)) {
-      _cryptoService.cacheKey(contact.nodeId, contact.publicKeyBase64);
-    }
+    _cryptoService.pinKeyIfAbsent(contact.nodeId, contact.publicKeyBase64);
 
-    final cipher = await _cryptoService.encryptContent(
+    final header = _newHeader(packetId ?? messageId);
+    final enc = await _encryptFor(
       file.toWire(),
       contact.nodeId,
+      header: header,
+      packetType: 'file',
     );
-    if (cipher == null) return PrivateSendResult.peerUnavailable;
+    if (!enc.encrypted) return PrivateSendResult.peerUnavailable;
 
     final packet = _buildPrivatePacket(
+      header: header,
       recipientNodeId: contact.nodeId,
-      wireContent: cipher,
+      wireContent: enc.wire,
       encrypted: true,
-      encryptionVersion: 1,
+      encryptionVersion: enc.version,
       packetType: 'file',
-      packetId: packetId ?? messageId,
     );
 
     _messageCache.add(packet.messageId);
@@ -1824,11 +1983,15 @@ class AirGridMeshService {
       // Version 1 with a public key: attempt decryption.
       // Anything else (unsupported version, missing key): show placeholder.
       // In all cases: do NOT rebroadcast - encrypted packets are direct.
-      if (packet.encryptionVersion == 1 && packet.senderPublicKey != null) {
-        final plaintext = await _cryptoService.decryptContent(
-          packet.content,
-          packet.senderPublicKey!,
-        );
+      if (CryptoService.isSupportedEncryptionVersion(
+            packet.encryptionVersion,
+          ) &&
+          packet.senderPublicKey != null) {
+        final inbound = await _decryptInbound(packet);
+        // A refused packet gets no bubble and no receipt: acknowledging it
+        // would tell a forger their packet reached us.
+        if (inbound.dropped) return;
+        final plaintext = inbound.plaintext;
         if (plaintext != null &&
             (packet.packetType == 'image' ||
                 packet.packetType == 'audio' ||
@@ -2053,17 +2216,18 @@ class AirGridMeshService {
   ) async {
     if (packet.conversationType != 'private' ||
         packet.recipientNodeId != localNodeId ||
-        packet.encryptionVersion != 1 ||
+        !CryptoService.isSupportedEncryptionVersion(packet.encryptionVersion) ||
         packet.senderPublicKey == null ||
         _contactStore.isBlocked(packet.senderNodeId) ||
         !_contactStore.isTrusted(packet.senderNodeId)) {
       return;
     }
 
-    final plaintext = await _cryptoService.decryptContent(
-      packet.content,
-      packet.senderPublicKey!,
-    );
+    // Trust is granted to a node id, so the packet must prove it holds that
+    // node's pinned key; a carried key alone would let anyone drive a
+    // trusted contact's rider session.
+    final inbound = await _decryptInbound(packet);
+    final plaintext = inbound.plaintext;
     if (plaintext == null) return;
 
     if (packet.packetType == 'rider_control') {

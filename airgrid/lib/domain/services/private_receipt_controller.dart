@@ -19,10 +19,14 @@ typedef EmitStatusUpdate =
 typedef AllowReadReceiptBatch = bool Function(String peerNodeId);
 typedef ReadReceiptRetryAfter = Duration Function(String peerNodeId);
 
+/// The public key pinned for a node id, base64, or null if none is known.
+typedef PinnedKeyLookup = String? Function(String nodeId);
+
 class PrivateReceiptController {
   PrivateReceiptController({
     required LocalIdentityStore identity,
     required CryptoService cryptoService,
+    PinnedKeyLookup? pinnedKeyLookup,
     required LookupDirectEndpoint lookupDirectEndpoint,
     required ConnectedEndpointsProvider connectedEndpoints,
     required SpoolControlPacket spoolControl,
@@ -34,6 +38,7 @@ class PrivateReceiptController {
     required ReadReceiptRetryAfter readReceiptRetryAfter,
   }) : _identity = identity,
        _cryptoService = cryptoService,
+       _pinnedKeyLookup = pinnedKeyLookup ?? cryptoService.pinnedKeyBase64,
        _lookupDirectEndpoint = lookupDirectEndpoint,
        _connectedEndpoints = connectedEndpoints,
        _spoolControl = spoolControl,
@@ -46,6 +51,7 @@ class PrivateReceiptController {
 
   final LocalIdentityStore _identity;
   final CryptoService _cryptoService;
+  final PinnedKeyLookup _pinnedKeyLookup;
   final LookupDirectEndpoint _lookupDirectEndpoint;
   final ConnectedEndpointsProvider _connectedEndpoints;
   final SpoolControlPacket _spoolControl;
@@ -99,16 +105,34 @@ class PrivateReceiptController {
   Future<void> handleReceipt(AirGridPacket packet) async {
     var receiptMessageId = packet.receiptMessageId;
     if (packet.encryptionVersion != null) {
-      if (packet.encryptionVersion != 1 || packet.senderPublicKey == null) {
+      final carried = packet.senderPublicKey;
+      if (!CryptoService.isSupportedEncryptionVersion(
+            packet.encryptionVersion,
+          ) ||
+          carried == null) {
         AirGridLogger.log(
           LogCategory.validation,
           'Encrypted receipt ${packet.messageId} missing supported metadata',
         );
         return;
       }
+      // A receipt flips the status of a message we sent, so it must come
+      // from the key we sent that message to, not from whatever key it
+      // carries.
+      final pinned = _pinnedKeyLookup(packet.senderNodeId);
+      if (pinned != null && pinned != carried) {
+        AirGridLogger.log(
+          LogCategory.crypto,
+          'Receipt ${packet.messageId} claiming to be from '
+          '${packet.senderNodeId} carries a key that does not match the '
+          'pinned one - dropped',
+        );
+        return;
+      }
       receiptMessageId = await _cryptoService.decryptContent(
         packet.content,
-        packet.senderPublicKey!,
+        pinned ?? carried,
+        aad: CryptoService.associatedDataFor(packet),
       );
     }
 
@@ -136,9 +160,12 @@ class PrivateReceiptController {
     AirGridPacket originalPacket,
     String preferredEndpointId,
   ) async {
+    // Trust on first use only. A key already pinned for the sender stays:
+    // the mesh has already refused any packet whose key disagreed with it,
+    // and a receipt must never be the path that swaps a contact's key.
     final originalSenderPublicKey = originalPacket.senderPublicKey;
     if (originalSenderPublicKey != null) {
-      _cryptoService.cacheKey(
+      _cryptoService.pinKeyIfAbsent(
         originalPacket.senderNodeId,
         originalSenderPublicKey,
       );
@@ -177,24 +204,35 @@ class PrivateReceiptController {
     String? wireReceiptMessageId = receiptMessageId;
     var hopLimit = 1;
 
+    // Header first: the ciphertext is bound to it.
+    final messageId = const Uuid().v4();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+
     if (senderPublicKey != null && _cryptoService.hasKey(recipientNodeId)) {
       final cipher = await _cryptoService.encryptContent(
         receiptMessageId,
         recipientNodeId,
+        aad: CryptoService.associatedData(
+          messageId: messageId,
+          senderNodeId: localNodeId,
+          recipientNodeId: recipientNodeId,
+          packetType: packetType,
+          timestamp: timestamp,
+        ),
       );
       if (cipher != null) {
         content = cipher;
-        encryptionVersion = 1;
+        encryptionVersion = CryptoService.kEncryptionVersion;
         wireReceiptMessageId = null;
         hopLimit = AirGridConstants.kHopLimit;
       }
     }
 
     return AirGridPacket(
-      messageId: const Uuid().v4(),
+      messageId: messageId,
       senderNodeId: localNodeId,
       senderName: _identity.displayName ?? 'Unknown',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
+      timestamp: timestamp,
       content: content,
       seenByNodes: [localNodeId],
       hopLimit: hopLimit,
