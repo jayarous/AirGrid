@@ -202,6 +202,58 @@ communication will be useful.
 AirGrid is currently Android-only.
 ```
 
+## R8 Release Check
+
+Release builds are shrunk by R8 with `android.r8.optimizedShrinking` on
+(`android/gradle.properties`). Two things in this app fail *silently* if R8
+strips the wrong class, so they are never caught by "the app launches":
+
+- Secure storage. `LocalIdentityStore` and `EntitlementStore` open
+  `EncryptedSharedPreferences` with `resetOnError: true`. If Tink cannot read
+  the keyset, the store is wiped and recreated: a new node identity, or a
+  paying user downgraded to free, with no crash and no log line from the app.
+- Plugin registration. The Flutter engine finds
+  `GeneratedPluginRegistrant` by name. If it were stripped, every plugin
+  would be missing at runtime.
+
+The pinned rules live in `android/app/proguard-rules.pro`. After **every**
+release build, and before uploading, run from `airgrid/`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool/check_r8_release.ps1
+```
+
+It fails if R8 reported missing classes, if the Tink keyset rule or the app
+rules file is absent from the merged configuration, or if any load-bearing
+class (secure storage stack, plugin entry points, our own service) is not in
+`mapping.txt`.
+
+Then do the on-device check with the shrunk build installed in place
+(`adb install -r`, never `flutter install`, which wipes app data):
+
+1. Note the Node ID and the Key fingerprint under Settings → Data &
+   Diagnostics. The Node ID lives in plain preferences and proves little;
+   the fingerprint is derived from the key in encrypted storage and is the
+   value that changes if that storage was reset.
+2. Force-stop the app and relaunch it: both must be unchanged, and
+   `adb logcat` must show no `SecureStorageAndroid` or
+   `FlutterSecureStoragePl` lines.
+3. Install the next build over it the same way: still unchanged.
+4. Open Settings → Subscription: the three prices must load from Play, and
+   Restore must answer (either a subscription or "No subscription found").
+   Needs a Play-signed-in account; a purchase needs that account to be an
+   internal tester.
+
+Re-run both after any upgrade of AGP, Flutter, `flutter_secure_storage`,
+`androidx.security-crypto`/Tink, or `in_app_purchase_android`, and after any
+change to `android/gradle.properties`.
+
+Verification record:
+
+| Date | Build | Device | Result |
+|---|---|---|---|
+| 2026-10-25 | 1.0.14+21 at `b758d0c` + keep rules, `flutter build apk --release --target-platform android-x64` | Emulator sdk_gphone64_x86_64, Android 16 (API 36), Play Store present | Script passed, no `missing_rules.txt`. Fresh install → onboarding → mesh online, foreground notification posted (id 1001). Node ID and fingerprint identical after force-stop relaunch and after `adb install -r` of the same APK. No secure-storage log lines, no crash. Paywall loaded AED 0.99 / 1.99 / 11.99 from Play; Restore answered "No subscription found". Not exercised: a purchase, and Nearby discovery (no second device). The 2026-08-16 smoke test had covered launch, drawables and the notification only. |
+
 ## Device Validation Before Wider Release
 
 Test on at least two physical Android devices with Google Play Services:

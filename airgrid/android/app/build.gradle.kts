@@ -46,6 +46,13 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
+            // Flutter's Gradle plugin already turns on minification and
+            // resource shrinking and adds its own rules file; this appends the
+            // app's pinned rules. See proguard-rules.pro for what and why.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

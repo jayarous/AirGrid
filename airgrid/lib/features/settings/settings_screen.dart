@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:airgrid/app/app_router.dart';
 import 'package:airgrid/core/battery_optimization_bridge.dart';
+import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/help_provider.dart';
 import 'package:airgrid/core/help_target.dart';
 import 'package:airgrid/core/logger.dart';
@@ -48,6 +49,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   late Future<MeshPermissionsSnapshot> _permissionsFuture;
   late Future<PlayServicesStatus> _playServicesFuture;
   late Future<PackageInfo> _packageInfoFuture;
+  late Future<String?> _fingerprintFuture;
 
   @override
   void initState() {
@@ -56,6 +58,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     _permissionsFuture = _loadPermissions();
     _playServicesFuture = _loadPlayServices();
     _packageInfoFuture = PackageInfo.fromPlatform();
+    _fingerprintFuture = CryptoService.fingerprint(
+      ref.read(localIdentityStoreProvider).publicKeyBase64 ?? '',
+    );
     if (widget.focusPermissions) {
       _schedulePermissionsFocus();
     }
@@ -765,6 +770,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 title: 'Node ID',
                 subtitle: identity.nodeId,
                 monospaceSubtitle: true,
+              ),
+              // The fingerprint of this device's encryption key, the same
+              // value a contact sees on this node's profile. Read it aloud to
+              // them to confirm a key out of band. It also proves the key
+              // survived a restart or an upgrade: the node id lives in plain
+              // preferences, but the key sits behind Android's encrypted
+              // storage, which resets itself rather than fail.
+              FutureBuilder<String?>(
+                future: _fingerprintFuture,
+                builder: (context, snapshot) => _SettingsRow(
+                  icon: Icons.key_outlined,
+                  title: 'Key fingerprint',
+                  subtitle: snapshot.connectionState != ConnectionState.done
+                      ? 'Loading'
+                      : snapshot.data ?? 'No encryption key on this device',
+                  monospaceSubtitle: true,
+                ),
               ),
               _SettingsRow(
                 icon: Icons.download_outlined,

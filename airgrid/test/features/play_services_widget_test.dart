@@ -201,6 +201,34 @@ void main() {
     );
   });
 
+  testWidgets('Settings shows the local key fingerprint beside the node id', (
+    tester,
+  ) async {
+    // The node id sits in plain preferences; the key behind the fingerprint
+    // sits in encrypted storage that resets itself rather than fail. Showing
+    // both is what lets a person confirm, after a restart or an upgrade,
+    // that the key survived — and read it to a contact to verify out of band.
+    await _pumpWithProviders(tester, const SettingsScreen(), unavailable);
+
+    await tester.scrollUntilVisible(
+      find.text('Key fingerprint'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Node ID'), findsOneWidget);
+    expect(find.text('local-node'), findsOneWidget);
+    expect(find.text('Key fingerprint'), findsOneWidget);
+    // Four groups of four hex digits, the format CryptoService.fingerprint
+    // produces for a real key; "No encryption key" would mean the identity
+    // store handed the screen nothing.
+    expect(
+      find.textContaining(RegExp(r'^[0-9A-F]{4}( [0-9A-F]{4}){3}$')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Settings separates Play Services status from permissions', (
     tester,
   ) async {
