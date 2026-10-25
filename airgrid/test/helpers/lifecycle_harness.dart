@@ -207,11 +207,26 @@ class FakeAudioRecorder extends AudioRecorder {
   final _frames = StreamController<Uint8List>.broadcast();
   bool recording = false;
   int startCount = 0;
+  int stopCount = 0;
+
+  /// The path handed to the last file [start]; what [stop] returns.
+  String? lastPath;
+
+  @override
+  Future<bool> hasPermission() async => true;
+
+  @override
+  Future<void> start(RecordConfig config, {required String path}) async {
+    startCount++;
+    recording = true;
+    lastPath = path;
+  }
 
   @override
   Future<Stream<Uint8List>> startStream(RecordConfig config) async {
     startCount++;
     recording = true;
+    lastPath = null;
     return _frames.stream;
   }
 
@@ -220,8 +235,9 @@ class FakeAudioRecorder extends AudioRecorder {
 
   @override
   Future<String?> stop() async {
+    stopCount++;
     recording = false;
-    return null;
+    return lastPath;
   }
 
   @override

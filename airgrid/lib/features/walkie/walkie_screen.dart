@@ -29,6 +29,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 
+/// Builds the recorder a walkie screen records push-to-talk clips with. One
+/// per screen, disposed with it. Overridden in tests with a fake so the hold
+/// flow can be driven without the record plugin's platform channels.
+final walkieRecorderFactoryProvider = Provider<AudioRecorder Function()>(
+  (ref) => AudioRecorder.new,
+);
+
 class WalkieScreen extends ConsumerStatefulWidget {
   const WalkieScreen({super.key});
 
@@ -38,7 +45,16 @@ class WalkieScreen extends ConsumerStatefulWidget {
 
 class _WalkieScreenState extends ConsumerState<WalkieScreen>
     with SingleTickerProviderStateMixin {
-  final AudioRecorder _audioRecorder = AudioRecorder();
+  AudioRecorder? _recorder;
+
+  AudioRecorder get _audioRecorder =>
+      _recorder ??= ref.read(walkieRecorderFactoryProvider)();
+
+  /// Path of the clip being recorded while push-to-talk is held, or null when
+  /// the recorder is idle. Whoever stops the recording takes this first, so
+  /// the controller-driven abort and the user's release can never both stop
+  /// the recorder.
+  String? _activeHoldPath;
   final DateTime _openedAt = DateTime.now();
   final Stopwatch _holdStopwatch = Stopwatch();
   final Set<String> _handledIncomingWalkieIds = <String>{};
@@ -117,7 +133,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     _ticker?.cancel();
     _statusClearTimer?.cancel();
     unawaited(_incomingPlayer?.dispose() ?? Future<void>.value());
-    unawaited(_audioRecorder.dispose());
+    unawaited(_recorder?.dispose() ?? Future<void>.value());
     _speakerPulseController.dispose();
     super.dispose();
   }
@@ -783,6 +799,7 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
       return;
     }
 
+    _activeHoldPath = filePath;
     _ticker?.cancel();
     _holdStopwatch
       ..reset()
@@ -823,8 +840,20 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     }
   }
 
-  Future<void> _cancelHoldRecording() async {
-    if (!ref.read(chatControllerProvider).walkie.isTransmitting) return;
+  Future<void> _cancelHoldRecording() =>
+      _abortHoldRecording(status: 'Canceled');
+
+  /// Stops a hold without sending it and discards the clip.
+  ///
+  /// Reached from the user's own cancel, and from the controller ending the
+  /// transmit from outside the screen: the private peer dropped off the mesh,
+  /// or the mesh was stopped. That second case used to leave the microphone
+  /// open and the ticker running until the screen was left, because both
+  /// release handlers bailed out once the controller's transmit flag was
+  /// already false.
+  Future<void> _abortHoldRecording({required String status}) async {
+    if (_activeHoldPath == null) return;
+    _activeHoldPath = null;
     _ticker?.cancel();
     _ticker = null;
     _holdStopwatch
@@ -841,19 +870,28 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
     await _deleteRecordedFile(path);
 
     if (!mounted) return;
-    ref
-        .read(chatControllerProvider.notifier)
-        .setWalkieTransmitting(isTransmitting: false);
+    if (ref.read(chatControllerProvider).walkie.isTransmitting) {
+      ref
+          .read(chatControllerProvider.notifier)
+          .setWalkieTransmitting(isTransmitting: false);
+    }
     setState(() {
       _elapsed = Duration.zero;
-      _status = 'Canceled';
+      _status = status;
     });
   }
 
   Future<void> _stopHoldAndSend() async {
     final current = ref.read(chatControllerProvider);
-    if (!current.walkie.isTransmitting || current.walkie.isSending) return;
+    if (_activeHoldPath == null || current.walkie.isSending) return;
+    if (!current.walkie.isTransmitting) {
+      // The controller ended this transmit before the finger lifted and the
+      // listener has not run yet. There is nobody to send to.
+      await _abortHoldRecording(status: 'Transmission ended');
+      return;
+    }
 
+    _activeHoldPath = null;
     _ticker?.cancel();
     _ticker = null;
     _holdStopwatch.stop();
@@ -2272,6 +2310,18 @@ class _WalkieScreenState extends ConsumerState<WalkieScreen>
             duration: const Duration(seconds: 2),
           ),
         );
+      },
+    );
+
+    // The controller clears the transmit flag on its own when the private
+    // peer disconnects or the mesh stops. The recorder is this screen's, so
+    // the screen has to follow, or the microphone stays open.
+    ref.listen<bool>(
+      chatControllerProvider.select((state) => state.walkie.isTransmitting),
+      (previous, next) {
+        if (previous == true && !next && _activeHoldPath != null) {
+          unawaited(_abortHoldRecording(status: 'Transmission ended'));
+        }
       },
     );
 

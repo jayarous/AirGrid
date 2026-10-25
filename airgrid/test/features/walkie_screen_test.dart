@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:airgrid/core/crypto_service.dart';
 import 'package:airgrid/core/play_services_bridge.dart';
 import 'package:airgrid/data/storage/battery_settings_store.dart';
@@ -15,7 +17,9 @@ import 'package:airgrid/features/chat/chat_state.dart';
 import 'package:airgrid/features/chat/conversation_target.dart';
 import 'package:airgrid/features/entitlement/entitlement_providers.dart';
 import 'package:airgrid/features/walkie/walkie_screen.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +27,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/fake_services.dart';
 import '../helpers/fake_transport.dart';
+import '../helpers/lifecycle_harness.dart';
 
 class _NoopMessageRepository implements MessageRepository {
   @override
@@ -80,6 +85,7 @@ Future<void> _pumpWalkie(
   FakeForegroundService? foreground,
   KnownContactStore? knownContactStore,
   ConversationTarget? initialConversation,
+  FakeAudioRecorder? recorder,
 }) async {
   final fg = foreground ?? FakeForegroundService();
   final tx = transport ?? FakeTransport();
@@ -115,6 +121,8 @@ Future<void> _pumpWalkie(
           chatControllerProvider.overrideWith(
             () => _SeededChatController(initialConversation),
           ),
+        if (recorder != null)
+          walkieRecorderFactoryProvider.overrideWithValue(() => recorder),
       ],
       child: const MaterialApp(home: WalkieScreen()),
     ),
@@ -132,6 +140,77 @@ Future<void> _switchToPrivateMode(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('a hold the controller ends from outside stops the mic', (
+    tester,
+  ) async {
+    // Recording writes a temp file through path_provider.
+    const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          pathChannel,
+          (call) async => Directory.systemTemp.path,
+        );
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(pathChannel, null),
+    );
+
+    final recorder = FakeAudioRecorder();
+    await _pumpWalkie(tester, recorder: recorder);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(WalkieScreen)),
+    );
+    final chat = container.read(chatControllerProvider.notifier);
+    await chat.startMesh();
+    await tester.pumpAndSettle();
+
+    // Hold push-to-talk (public mode needs only a running mesh).
+    final ptt = find.byWidgetPredicate(
+      (w) => w is Semantics && w.properties.label == 'Push to talk',
+    );
+    await tester.ensureVisible(ptt);
+    await tester.pumpAndSettle();
+    final gesture = await tester.startGesture(tester.getCenter(ptt));
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 100));
+    await tester.pump();
+    await tester.pump();
+    expect(recorder.recording, isTrue);
+    expect(
+      container.read(chatControllerProvider).walkie.isTransmitting,
+      isTrue,
+    );
+
+    // The controller ends the transmit on its own: this is the same call its
+    // peer-list listener makes when the private peer drops off the mesh, and
+    // what stopMesh does.
+    chat.setWalkieTransmitting(isTransmitting: false);
+    await tester.pump();
+    // Discarding the clip deletes a real temp file, which only completes in
+    // real time.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+
+    expect(recorder.recording, isFalse, reason: 'the mic must not stay open');
+    expect(recorder.stopCount, 1);
+    expect(find.text('Transmission ended'), findsOneWidget);
+
+    // Letting go afterwards must not stop the recorder again or complain
+    // that the recording is unavailable.
+    await gesture.up();
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump(const Duration(seconds: 5));
+    expect(recorder.stopCount, 1);
+    expect(
+      container.read(chatControllerProvider).walkie.lastError,
+      isNot('Recording unavailable'),
+    );
+  });
+
   testWidgets('renders without overflow on a compact portrait screen', (
     tester,
   ) async {
