@@ -28,7 +28,12 @@ abstract interface class MeshForegroundService {
   Stream<void> get riderMuteRequests;
   Stream<void> get riderEndRequests;
   Future<void> startMeshService();
-  Future<void> startRiderService({
+
+  /// Promotes the running mesh service to a Rider session (microphone type,
+  /// rider notification). Returns false when the platform refused, which on
+  /// Android 14+ happens whenever the app is not on screen; the caller must
+  /// then abort the session rather than assume it is live.
+  Future<bool> startRiderService({
     required String peerName,
     required bool muted,
   });
@@ -39,6 +44,11 @@ abstract interface class MeshForegroundService {
     required String peerNodeId,
     required String senderName,
   });
+
+  /// Ends the Rider promotion. The platform hands the service back to the
+  /// mesh when the mesh still wants it, and stops it otherwise. Callers that
+  /// know the mesh is running should prefer [startMeshService], which says
+  /// the same thing without relying on platform bookkeeping.
   Future<void> stopRiderService();
   Future<void> stopMeshService();
 }
@@ -108,7 +118,7 @@ class ForegroundServiceBridge implements MeshForegroundService {
   Future<void> startMeshService() => startMeshServiceStatic();
 
   @override
-  Future<void> startRiderService({
+  Future<bool> startRiderService({
     required String peerName,
     required bool muted,
   }) => startRiderServiceStatic(peerName: peerName, muted: muted);
@@ -153,23 +163,26 @@ class ForegroundServiceBridge implements MeshForegroundService {
     }
   }
 
-  static Future<void> startRiderServiceStatic({
+  static Future<bool> startRiderServiceStatic({
     required String peerName,
     required bool muted,
   }) async {
-    if (defaultTargetPlatform != TargetPlatform.android) return;
+    // Off Android there is no service to promote and nothing to refuse.
+    if (defaultTargetPlatform != TargetPlatform.android) return true;
     _ensureHandlerInstalled();
     try {
-      await _channel.invokeMethod<void>('startRiderService', {
+      await _channel.invokeMethod<bool>('startRiderService', {
         'peerName': peerName,
         'muted': muted,
       });
       AirGridLogger.log(LogCategory.connection, 'Rider service started');
+      return true;
     } on PlatformException catch (e) {
       AirGridLogger.log(
         LogCategory.connection,
         'Failed to start Rider service: ${e.message}',
       );
+      return false;
     }
   }
 

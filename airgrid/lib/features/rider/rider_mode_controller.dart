@@ -47,6 +47,10 @@ final riderAudioPlaybackProvider = Provider<RiderAudioPlayback>(
   (ref) => const RiderAudioBridge(),
 );
 
+/// The microphone capture used for a ride. Overridden in tests with a fake so
+/// the controller can be driven without the record plugin's platform channels.
+final riderRecorderProvider = Provider<AudioRecorder>((ref) => AudioRecorder());
+
 final riderModeControllerProvider =
     NotifierProvider<RiderModeController, RiderModeState>(
       RiderModeController.new,
@@ -159,7 +163,7 @@ class RiderModeState {
 }
 
 class RiderModeController extends Notifier<RiderModeState> {
-  final _recorder = AudioRecorder();
+  late final AudioRecorder _recorder;
   final _pendingPlayback = SplayTreeMap<int, RiderAudioFramePayload>();
   final _captureBuffer = BytesBuilder(copy: false);
   StreamSubscription<RiderModeEvent>? _riderSub;
@@ -184,6 +188,7 @@ class RiderModeController extends Notifier<RiderModeState> {
   @override
   RiderModeState build() {
     final settingsStore = ref.read(riderModeSettingsStoreProvider);
+    _recorder = ref.read(riderRecorderProvider);
     _playback = ref.read(riderAudioPlaybackProvider);
     _settingsSub = settingsStore.settingsStream.listen((settings) {
       state = state.copyWith(settings: settings);
@@ -368,7 +373,19 @@ class RiderModeController extends Notifier<RiderModeState> {
       }
 
       await _audio.stopPlayback();
-      await _foreground.stopRiderService();
+      // The rider notification rides on the foreground service that keeps
+      // the mesh alive. While the mesh is up, hand the service back to it
+      // (same service, mesh notification, no microphone type) instead of
+      // stopping it; stopping it is what let Android kill the mesh as soon
+      // as the phone locked after a ride.
+      if (ref.read(chatControllerProvider).meshStarted) {
+        await _foreground.startMeshService();
+      } else {
+        await _foreground.stopRiderService();
+      }
+      if (wasActive) {
+        ref.read(chatControllerProvider.notifier).endForegroundCriticalAction();
+      }
       _pendingPlayback.clear();
 
       state = state.copyWith(
@@ -648,10 +665,24 @@ class RiderModeController extends Notifier<RiderModeState> {
     }
 
     await _audio.startPlayback(sampleRate: _riderSampleRate, channels: 1);
-    await _foreground.startRiderService(
+    final promoted = await _foreground.startRiderService(
       peerName: peer.displayName,
       muted: state.isMuted,
     );
+    if (!promoted) {
+      // Android 14+ will not promote the service to microphone use while the
+      // app is off screen, which is exactly where a trusted auto-join can
+      // land. The peer has already been told we accepted, so tell them we
+      // are gone rather than leave them talking to nobody.
+      await _audio.stopPlayback();
+      await _notifyPeerSessionEnded(peer.nodeId ?? '', sessionId);
+      state = state.copyWith(
+        isStarting: false,
+        lastError: 'Open AirGrid to start Rider Mode',
+        clearPeer: true,
+      );
+      return;
+    }
     state = state.copyWith(
       isActive: true,
       isStarting: false,
@@ -663,6 +694,9 @@ class RiderModeController extends Notifier<RiderModeState> {
       clearLastError: true,
       clearEndedReason: true,
     );
+    // A live ride must survive the app leaving the screen: no battery-saver
+    // teardown on pause, no transport restart on resume.
+    ref.read(chatControllerProvider.notifier).beginForegroundCriticalAction();
     _expectedPlaybackSequence = 0;
     _pendingPlayback.clear();
     _startPlaybackLoop();

@@ -28,6 +28,14 @@ class FakeForegroundService implements MeshForegroundService {
   int riderStopCount = 0;
   bool riderMuted = false;
 
+  /// What [startRiderService] answers. False models Android 14+ refusing a
+  /// microphone-type promotion while the app is not on screen.
+  bool riderStartSucceeds = true;
+
+  /// Set to model the user tapping Exit on the notification while Dart was
+  /// not listening; consumed by the next [consumePendingExitAction].
+  bool pendingExitAction = false;
+
   @override
   Stream<void> get exitRequests => _exitController.stream;
 
@@ -38,7 +46,11 @@ class FakeForegroundService implements MeshForegroundService {
   Stream<void> get riderEndRequests => _riderEndController.stream;
 
   @override
-  Future<bool> consumePendingExitAction() async => false;
+  Future<bool> consumePendingExitAction() async {
+    final pending = pendingExitAction;
+    pendingExitAction = false;
+    return pending;
+  }
 
   @override
   Future<PrivateMessageNotificationTap?>
@@ -60,12 +72,14 @@ class FakeForegroundService implements MeshForegroundService {
   }
 
   @override
-  Future<void> startRiderService({
+  Future<bool> startRiderService({
     required String peerName,
     required bool muted,
   }) async {
+    if (!riderStartSucceeds) return false;
     riderStartCount++;
     riderMuted = muted;
+    return true;
   }
 
   @override

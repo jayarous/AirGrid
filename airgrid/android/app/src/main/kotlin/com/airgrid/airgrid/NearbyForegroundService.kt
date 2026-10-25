@@ -9,11 +9,18 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
+// One service, two faces. It keeps Nearby Connections alive for the mesh and,
+// during a Rider session, also carries the microphone type and the rider
+// notification. Every start intent re-promotes it: a rider intent upgrades
+// the running mesh service, a plain intent downgrades it back. It is never
+// stopped to end a ride; see MainActivity.stopRiderService.
 class NearbyForegroundService : Service() {
 
     companion object {
+        private const val TAG = "NearbyForegroundService"
         const val CHANNEL_ID = "airgrid_mesh"
         const val NOTIFICATION_ID = 1001
         const val ACTION_RIDER_MUTE = "com.airgrid.app.action.RIDER_MUTE"
@@ -35,6 +42,32 @@ class NearbyForegroundService : Service() {
             buildNotification()
         }
 
+        try {
+            promote(notification, isRider)
+        } catch (e: Exception) {
+            // Android 14+ refuses a microphone-type promotion from the
+            // background (ForegroundServiceStartNotAllowedException or a
+            // SecurityException, depending on the release). MainActivity
+            // checks visibility before asking, but a race is still possible.
+            // An uncaught throw here kills the whole process, mesh included,
+            // so fall back to the plain mesh service, which needs no
+            // while-in-use permission, and keep running.
+            Log.w(TAG, "Foreground promotion failed (rider=$isRider): ${e.message}")
+            if (!isRider) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            try {
+                promote(buildNotification(), isRider = false)
+            } catch (fallback: Exception) {
+                Log.e(TAG, "Mesh fallback promotion failed: ${fallback.message}")
+                stopSelf()
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun promote(notification: Notification, isRider: Boolean) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val serviceType = if (isRider) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
@@ -47,7 +80,6 @@ class NearbyForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        return START_NOT_STICKY
     }
 
     override fun onDestroy() {

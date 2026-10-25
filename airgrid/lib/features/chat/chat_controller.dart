@@ -527,6 +527,10 @@ class ChatController extends Notifier<ChatState> {
       _contactsSub = _mesh.knownContactsStream.listen((contacts) {
         state = state.copyWith(knownContacts: contacts);
       });
+      // The stream only carries changes. Contacts loaded from disk before
+      // this point, trust flags included, have to be read once directly or
+      // trusted-only features see an empty list until something upserts.
+      _refreshKnownContactsFromStore();
 
       _locationSub = _mesh.locationStream.listen((location) {
         if (state.blockedNodeIds.contains(location.nodeId)) return;
@@ -652,8 +656,46 @@ class ChatController extends Notifier<ChatState> {
     }
   }
 
+  /// Brings the mesh back after the app returns to the foreground.
+  ///
+  /// This used to force a full transport restart on every resume. That
+  /// clears the peer list, which ends any walkie or Rider session as "peer
+  /// lost", and resume fires for pulling down the notification shade or
+  /// answering a permission dialog. So the restart is now the last resort:
+  /// it only runs when nothing is in flight and the transport shows no sign
+  /// of life. A connected endpoint proves the transport is alive, and an
+  /// active session cannot exist without one.
   Future<void> refreshMeshAfterResume() async {
     if (!state.meshStarted) {
+      return;
+    }
+    if (await _foreground.consumePendingExitAction()) {
+      await stopMesh();
+      return;
+    }
+    if (_foregroundCriticalActions > 0) {
+      AirGridLogger.log(
+        LogCategory.connection,
+        'Resume: foreground action in progress, mesh left untouched',
+      );
+      return;
+    }
+    final walkie = state.walkie;
+    if (walkie.sessionActivePeerNodeId != null ||
+        walkie.invitePeerNodeId != null ||
+        walkie.isTransmitting) {
+      AirGridLogger.log(
+        LogCategory.connection,
+        'Resume: walkie session live, mesh left untouched',
+      );
+      return;
+    }
+    if (_transport.connectedEndpoints.isNotEmpty) {
+      AirGridLogger.log(
+        LogCategory.connection,
+        'Resume: transport has ${_transport.connectedEndpoints.length} '
+        'endpoint(s), mesh left untouched',
+      );
       return;
     }
     await startMesh(forceRestart: true);

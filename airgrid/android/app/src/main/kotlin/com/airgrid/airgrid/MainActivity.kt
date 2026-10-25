@@ -54,6 +54,27 @@ class MainActivity : FlutterActivity() {
     private var pendingExitAction = false
     private var pendingPrivateMessageTap: HashMap<String, Any>? = null
 
+    // Dart's view of whether the mesh wants the foreground service up. The
+    // rider notification rides on that same service, so ending a ride must
+    // hand the service back to the mesh rather than stop it.
+    private var meshServiceWanted = false
+
+    // Whether this activity is between onStart and onStop. Android 14+ only
+    // lets a microphone-type foreground service be promoted while the app is
+    // visible; asking from the background throws inside the service and
+    // takes the whole process down.
+    private var activityVisible = false
+
+    override fun onStart() {
+        super.onStart()
+        activityVisible = true
+    }
+
+    override fun onStop() {
+        activityVisible = false
+        super.onStop()
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -65,15 +86,12 @@ class MainActivity : FlutterActivity() {
         foregroundChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startMeshService" -> {
-                    val intent = Intent(this, NearbyForegroundService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(intent)
-                    } else {
-                        startService(intent)
-                    }
+                    meshServiceWanted = true
+                    startMeshService()
                     result.success(null)
                 }
                 "stopMeshService" -> {
+                    meshServiceWanted = false
                     stopService(Intent(this, NearbyForegroundService::class.java))
                     result.success(null)
                 }
@@ -104,17 +122,47 @@ class MainActivity : FlutterActivity() {
                 "startRiderService" -> {
                     val peerName = call.argument<String>("peerName") ?: "Rider"
                     val muted = call.argument<Boolean>("muted") ?: false
-                    startRiderService(peerName, muted)
-                    result.success(null)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                        !activityVisible
+                    ) {
+                        // Refuse up front so Dart can abort the session
+                        // cleanly instead of the service throwing on
+                        // promotion while the app is in the background.
+                        result.error(
+                            "rider_fgs_not_allowed",
+                            "Rider Mode can only start while AirGrid is on screen",
+                            null,
+                        )
+                    } else {
+                        try {
+                            startRiderService(peerName, muted)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("rider_fgs_failed", e.message, null)
+                        }
+                    }
                 }
                 "updateRiderServiceMuted" -> {
                     val muted = call.argument<Boolean>("muted") ?: false
                     val peerName = call.argument<String>("peerName") ?: "Rider"
-                    startRiderService(peerName, muted)
-                    result.success(null)
+                    try {
+                        startRiderService(peerName, muted)
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("rider_fgs_failed", e.message, null)
+                    }
                 }
                 "stopRiderService" -> {
-                    stopService(Intent(this, NearbyForegroundService::class.java))
+                    // The rider notification lives on the mesh's service. While
+                    // the mesh still wants it, hand the service back to the mesh
+                    // (same service, plain notification, connected-device type
+                    // only) instead of stopping it; stopping it here is what
+                    // let Android kill the mesh the moment a ride ended.
+                    if (meshServiceWanted) {
+                        startMeshService()
+                    } else {
+                        stopService(Intent(this, NearbyForegroundService::class.java))
+                    }
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -241,6 +289,15 @@ class MainActivity : FlutterActivity() {
         if (action != ACTION_EXIT_MESH) return
         pendingExitAction = true
         foregroundChannel?.invokeMethod("exitMesh", null)
+    }
+
+    private fun startMeshService() {
+        val intent = Intent(this, NearbyForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun startRiderService(peerName: String, muted: Boolean) {
