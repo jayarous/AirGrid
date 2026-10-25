@@ -55,5 +55,8 @@ class EntitlementNotifier extends Notifier<Entitlement> {
 /// store directly, so a renewal arriving mid-session rebuilds every gated
 /// widget without anything having to remember to refresh.
 final featureGatesProvider = Provider<FeatureGates>((ref) {
-  return FeatureGates(ref.watch(entitlementProvider));
+  // The store owns the clock. Reading the wall clock here instead was what
+  // let tests pinned to one date lapse a month later.
+  final store = ref.watch(entitlementStoreProvider);
+  return FeatureGates(ref.watch(entitlementProvider), clock: store.nowUtc);
 });

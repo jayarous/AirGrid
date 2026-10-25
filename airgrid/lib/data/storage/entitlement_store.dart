@@ -18,6 +18,15 @@ abstract interface class EntitlementStore {
 
   Stream<Entitlement> get entitlementStream;
 
+  /// The clock every entitlement judgement is made against.
+  ///
+  /// Production passes `DateTime.now`; tests inject a fixed instant. It is
+  /// part of the interface so that the feature gates and the paywall ask the
+  /// store what time it is instead of the wall clock. The alternative was a
+  /// time bomb: fixtures pinned to one date went lapsed a month later and the
+  /// whole Plus widget suite turned red with no code change.
+  DateTime nowUtc();
+
   Future<void> save(Entitlement entitlement);
 
   /// Folds the result of a Play query into the cache and returns the result.
@@ -43,6 +52,7 @@ mixin EntitlementReconciler implements EntitlementStore {
   static const Duration ceilingWriteGranularity = Duration(hours: 1);
 
   /// Injected for tests; production passes `DateTime.now`.
+  @override
   DateTime nowUtc();
 
   /// Keeps a known billing period when Play could not report one.

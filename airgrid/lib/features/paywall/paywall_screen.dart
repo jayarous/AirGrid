@@ -132,7 +132,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final text = Theme.of(context).textTheme;
     final state = ref.watch(paywallControllerProvider);
     final entitlement = ref.watch(entitlementProvider);
-    final status = entitlement.statusAt(DateTime.now());
+    final status = ref.watch(featureGatesProvider).status;
     final isSubscribed =
         status == EntitlementStatus.active ||
         status == EntitlementStatus.offlineTrusted;
@@ -168,7 +168,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
         children: [
           if (_showChangeNotice) const PlusChangeBanner(),
-          if (isSubscribed) _ActivePlanCard(entitlement: entitlement),
+          if (isSubscribed)
+            _ActivePlanCard(entitlement: entitlement, status: status),
           Text(switch (status) {
             EntitlementStatus.lapsed => 'Your Plus subscription has ended',
             EntitlementStatus.active || EntitlementStatus.offlineTrusted =>
@@ -282,15 +283,16 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 class _ActivePlanCard extends StatelessWidget {
   final Entitlement entitlement;
 
-  const _ActivePlanCard({required this.entitlement});
+  /// Judged by the parent against the store's clock, never the wall clock.
+  final EntitlementStatus status;
+
+  const _ActivePlanCard({required this.entitlement, required this.status});
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final offline =
-        entitlement.statusAt(DateTime.now()) ==
-        EntitlementStatus.offlineTrusted;
+    final offline = status == EntitlementStatus.offlineTrusted;
 
     final plan = switch (entitlement.period) {
       BillingPeriod.weekly => 'Weekly plan',
