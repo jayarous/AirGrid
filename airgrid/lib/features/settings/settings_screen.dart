@@ -835,7 +835,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Latest update: version 1.0.11 improves walkie UX polish, bottom-screen version visibility, and release readiness.',
+                        'Latest update: version 1.0.15 keeps the mesh running after a ride, releases the walkie mic on disconnect, and ties private messages to each contact\'s key.',
                         textAlign: TextAlign.center,
                         style: Theme.of(
                           context,

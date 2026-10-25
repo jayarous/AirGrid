@@ -1,0 +1,9 @@
+AirGrid 1.0.15
+
+What's new:
+- Rider Mode now keeps the mesh running after a ride ends, and a ride no longer drops when you check a notification, take a call, or switch apps.
+- Rider Mode tells you to open AirGrid if it is asked to start while the app is in the background, instead of closing the app.
+- The walkie microphone now switches off the moment the other person disconnects, even if you are still holding the button.
+- Private messages are now tied to the key you have on record for each contact. A message that arrives under a contact's name with a different key is refused and you are warned, and an old message can no longer be replayed to you as a new one. Contacts on older versions should update to keep reading your private messages.
+- Settings → Data & Diagnostics shows your key fingerprint, so you can read it to a contact and confirm it matches what they see.
+- Smaller download.
